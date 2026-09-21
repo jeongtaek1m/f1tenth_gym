@@ -1,4 +1,8 @@
-"""정답 waypoint(전방 호길이 기준)와 학습용 pose 샘플링."""
+"""정답 waypoint 와 학습용 pose 샘플링.
+
+waypoint 는 직선 거리가 아니라 기준선을 따라간 호길이로 잡는다. 직선 거리로 잡으면 코너에서
+점들이 안쪽을 파고들어 정답이 이상해진다.
+"""
 import numpy as np
 from .config import Config
 from .track import Track
@@ -16,6 +20,7 @@ def lateral_error(track: Track, xy) -> float:
 
 
 def waypoints_ahead(pose, track: Track, cfg: Config) -> np.ndarray:
+    """pose 앞쪽 ahead_m 지점들을 차량 좌표계로. 트랙 끝에서는 한 바퀴 돌아 이어진다."""
     i = nearest_index(track, pose[:2])
     s_t = (track.s[i] + np.asarray(cfg.waypoints.ahead_m)) % track.length
     j = np.searchsorted(track.s, s_t) % len(track.s)
@@ -23,8 +28,9 @@ def waypoints_ahead(pose, track: Track, cfg: Config) -> np.ndarray:
 
 
 def sample_pose(track: Track, cfg: Config, rng: np.random.Generator) -> np.ndarray:
+    """트랙 위 아무 데나 차를 놓는다. 주행 없이 학습 데이터를 만들 수 있는 이유."""
     i = int(rng.integers(len(track.center)))
-    corridor = float(track.left_m[i] + track.right_m[i])      # 그 지점의 실제 트랙 폭
+    corridor = float(track.left_m[i] + track.right_m[i])       # 그 지점의 실제 트랙 폭
     lat = rng.uniform(-1, 1) * cfg.sampling.lateral_frac * corridor
     dth = rng.uniform(-1, 1) * np.deg2rad(cfg.sampling.heading_deg)
     h = track.heading[i]
@@ -34,7 +40,8 @@ def sample_pose(track: Track, cfg: Config, rng: np.random.Generator) -> np.ndarr
 
 
 def body_corners(pose, cfg: Config) -> np.ndarray:
-    """차체 사각형 네 모서리(world). gym의 collision_models.get_vertices 와 같은 규약: pose를 중심으로 length x width."""
+    """차체 사각형 네 모서리 (world). gym 의 collision_models.get_vertices 와 같은 규약으로
+    pose 를 중심에 둔 length x width 사각형이다."""
     x, y, th = pose
     L, W = cfg.closed_loop.car_length_m / 2, cfg.closed_loop.car_width_m / 2
     local = np.array([[L, W], [L, -W], [-L, -W], [-L, W]])
@@ -43,16 +50,16 @@ def body_corners(pose, cfg: Config) -> np.ndarray:
 
 
 def signed_lateral(track: Track, xy):
-    """기준 경로에서의 부호 있는 횡 오프셋 (+ = 왼쪽). (offset, 최근접 인덱스) 반환."""
+    """기준선 대비 부호 있는 횡 오프셋(+ = 왼쪽)과 최근접 인덱스."""
     i = nearest_index(track, xy)
     n = np.array([-np.sin(track.heading[i]), np.cos(track.heading[i])])
     return float((np.asarray(xy)[:2] - track.center[i]) @ n), i
 
 
 def crosses_tape(pose, track: Track, cfg: Config) -> bool:
-    """실격 규칙: 차체 모서리 중 하나라도 테이프 안쪽 선을 넘으면 True.
+    """차체 모서리 하나라도 테이프 안쪽 선을 넘으면 실격.
 
-    테이프 위치는 지점마다 다를 수 있으므로(벽 추종 트랙) track.left_m / right_m 을 쓴다.
+    벽 추종 트랙은 지점마다 폭이 다르므로 상수가 아니라 track.left_m / right_m 을 본다.
     """
     half_tape = cfg.lane.tape_width_m / 2
     for c in body_corners(pose, cfg):

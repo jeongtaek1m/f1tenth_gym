@@ -1,9 +1,9 @@
-"""지도 위 시각화: 전체 맵에서 pose 위치, 차 주변 확대 top-down에 카메라 화각과 GT waypoint.
+"""지도와 주행 경로 그리기. 학습에는 안 쓰고 눈으로 확인하는 용도다.
 
-세 좌표계를 오간다.
+좌표계가 셋이라 헷갈리기 쉽다.
   world  : gym 맵 좌표 (m)
-  map px : examples/*.png 픽셀. col = (x - ox)/res, row = H-1 - (y - oy)/res  (gym은 이미지를 상하 반전해 씀)
-  canvas : 확대 뷰 픽셀. 차를 중심에 두고 위가 world +y 가 아니라 **차량 전방**이 되도록 회전한다.
+  map px : examples/*.png 픽셀. col = (x - ox)/res, row = H-1 - (y - oy)/res  (gym 이 상하 반전해 쓴다)
+  canvas : 확대 뷰 픽셀. 차를 가운데 두고 **위가 차량 전방**이 되게 회전한 좌표다.
 """
 import os
 import cv2
@@ -13,12 +13,12 @@ from .config import Config
 from .track import Track
 from .render import to_vehicle, bev_pixels
 
-CAR_LEN_M, CAR_WID_M = 0.58, 0.31          # gym 기본 차체 크기 (표시용)
+CAR_LEN_M, CAR_WID_M = 0.58, 0.31          # gym 기본 차체. 표시용이라 config 와 별개로 둔다.
 COL_WP, COL_CAR, COL_FOV, COL_CENTER = (0, 255, 0), (255, 80, 0), (255, 200, 0), (90, 90, 90)
 
 
 def to_world(pose, pts_vehicle: np.ndarray) -> np.ndarray:
-    """Inverse of render.to_vehicle."""
+    """render.to_vehicle 의 역변환."""
     x, y, th = pose
     c, s = np.cos(th), np.sin(th)
     R = np.array([[c, -s], [s, c]])
@@ -26,7 +26,7 @@ def to_world(pose, pts_vehicle: np.ndarray) -> np.ndarray:
 
 
 class MapImage:
-    """맵 PNG + yaml(origin, resolution). world <-> pixel 변환을 담당."""
+    """맵 PNG + yaml(origin, resolution). world <-> 픽셀 변환만 담당한다."""
 
     def __init__(self, yaml_path: str):
         meta = yaml.safe_load(open(yaml_path))
@@ -50,7 +50,10 @@ def _poly(pts, shift=4):
 
 
 def draw_track_on_map(mapimg: MapImage, track: Track, cfg: Config, crop_margin_m: float = 2.0):
-    """맵 PNG 위에 테이프를 그리고 트랙 주변만 잘라 반환. (img_bgr, offset_px) — offset은 잘라낸 좌상단."""
+    """맵에 테이프를 그리고 트랙 주변만 잘라서 (img_bgr, offset_px) 로 돌려준다.
+
+    offset 은 잘라낸 좌상단의 원본 픽셀 좌표. 이후에 이 그림 위에 뭘 더 그리려면 다 빼줘야 한다.
+    """
     img = cv2.cvtColor(mapimg.gray, cv2.COLOR_GRAY2BGR)
     tape = tuple(int(c) for c in cfg.lane.color_tape)
     px = mapimg.world_to_px(track.quads)                     # (M,4,2)
@@ -62,7 +65,7 @@ def draw_track_on_map(mapimg: MapImage, track: Track, cfg: Config, crop_margin_m
 
 
 def mark_poses_on_map(map_bgr: np.ndarray, offset_px, mapimg: MapImage, poses, labels=None, radius=10):
-    """잘라낸 맵 위에 pose들을 번호 붙은 원과 헤딩 선으로 표시."""
+    """잘라낸 맵 위에 pose 를 번호 붙은 원과 헤딩 선으로 찍는다."""
     for k, pose in enumerate(poses):
         c = mapimg.world_to_px(pose[:2]) - offset_px
         tip = mapimg.world_to_px(to_world(pose, [[3.0, 0.0]])[0]) - offset_px
@@ -77,7 +80,7 @@ def mark_poses_on_map(map_bgr: np.ndarray, offset_px, mapimg: MapImage, poses, l
 def local_view(pose, track: Track, wp_vehicle, cfg: Config, mapimg: MapImage = None,
                ahead_m: float = 5.0, behind_m: float = 1.5, half_width_m: float = 3.0,
                res_m: float = 0.01) -> np.ndarray:
-    """차량 중심 확대 top-down. 위 = 차량 전방. 벽(맵), 테이프, 차, 카메라 화각, BEV 범위, GT waypoint."""
+    """차 주변 확대 top-down. 위가 차량 전방이고, 벽·테이프·차체·카메라 화각·BEV 범위·GT waypoint 를 얹는다."""
     h, w = int(round((ahead_m + behind_m) / res_m)), int(round(2 * half_width_m / res_m))
 
     def vp(pts_v):   # vehicle m -> canvas px
@@ -85,40 +88,45 @@ def local_view(pose, track: Track, wp_vehicle, cfg: Config, mapimg: MapImage = N
         return np.stack([(half_width_m - p[..., 1]) / res_m, (ahead_m - p[..., 0]) / res_m], axis=-1)
 
     img = np.full((h, w, 3), 235, np.uint8)
-    if mapimg is not None:                                    # 맵의 벽을 캔버스 좌표로 warp
+    if mapimg is not None:
+        # 맵의 벽을 캔버스로 옮긴다. 세 점의 대응만 알면 affine 이 정해진다.
         src = mapimg.world_to_px(to_world(pose, [[0, 0], [1, 0], [0, 1]])).astype(np.float32)
         dst = vp([[0, 0], [1, 0], [0, 1]]).astype(np.float32)
         A = cv2.getAffineTransform(src, dst)
         occ = cv2.warpAffine(mapimg.gray, A, (w, h), flags=cv2.INTER_NEAREST, borderValue=255)
         img[occ < 128] = (40, 40, 40)
+
     qv = to_vehicle(pose, track.quads)
     ctr = qv.mean(1)
     keep = (ctr[:, 0] > -behind_m - 1) & (ctr[:, 0] < ahead_m + 1) & (np.abs(ctr[:, 1]) < half_width_m + 1)
     tape = tuple(int(c) for c in cfg.lane.color_tape)
     cv2.fillPoly(img, list(_poly(vp(qv[keep]))), tape, lineType=cv2.LINE_AA, shift=4)
+
     cv = to_vehicle(pose, track.center)
     kc = (cv[:, 0] > -behind_m - 1) & (cv[:, 0] < ahead_m + 1) & (np.abs(cv[:, 1]) < half_width_m + 1)
     for p in vp(cv[kc]):
         cv2.circle(img, tuple(np.round(p).astype(int)), 1, COL_CENTER, -1)
-    # BEV 범위(점선 사각형)와 카메라 화각(반투명 부채꼴)
-    b = cfg.bev
+
+    b = cfg.bev                                            # BEV 범위는 점선 사각형으로
     rect = vp([[b.x_range_m[0], b.y_range_m[1]], [b.x_range_m[1], b.y_range_m[1]],
                [b.x_range_m[1], b.y_range_m[0]], [b.x_range_m[0], b.y_range_m[0]]])
     cv2.polylines(img, [_poly(rect)], True, (200, 120, 200), 1, cv2.LINE_AA, shift=4)
-    half = np.deg2rad(cfg.camera.hfov_deg) / 2
+
+    half = np.deg2rad(cfg.camera.hfov_deg) / 2             # 카메라 화각은 반투명 부채꼴로
     ox = cfg.camera.offset_x_m
     far = cfg.render.far_m
     wedge = vp([[ox, 0], [ox + far * np.cos(half), far * np.sin(half)], [ox + far * np.cos(half), -far * np.sin(half)]])
     overlay = img.copy()
     cv2.fillPoly(overlay, [_poly(wedge)], COL_FOV, lineType=cv2.LINE_AA, shift=4)
     img = cv2.addWeighted(overlay, 0.15, img, 0.85, 0)
-    # 차체(후륜축 원점, 앞으로 뻗은 사각형)와 heading 화살표
+
+    # 차체. 원점이 후륜축이라 사각형을 앞으로 뻗어 그린다.
     car = vp([[-0.1, CAR_WID_M / 2], [CAR_LEN_M - 0.1, CAR_WID_M / 2],
               [CAR_LEN_M - 0.1, -CAR_WID_M / 2], [-0.1, -CAR_WID_M / 2]])
     cv2.fillPoly(img, [_poly(car)], COL_CAR, lineType=cv2.LINE_AA, shift=4)
     a0, a1 = vp([[0, 0], [1.0, 0]])
     cv2.arrowedLine(img, tuple(np.round(a0).astype(int)), tuple(np.round(a1).astype(int)), COL_CAR, 2, cv2.LINE_AA, tipLength=0.25)
-    # GT waypoint
+
     for k, p in enumerate(vp(np.asarray(wp_vehicle))):
         c = tuple(np.round(p).astype(int))
         cv2.circle(img, c, 6, COL_WP, -1, cv2.LINE_AA)
@@ -127,7 +135,7 @@ def local_view(pose, track: Track, wp_vehicle, cfg: Config, mapimg: MapImage = N
 
 
 def side_by_side(*imgs, gap=10, bg=255) -> np.ndarray:
-    """높이를 맞춰 가로로 붙인다."""
+    """높이를 맞춰 가로로 이어 붙인다."""
     hmax = max(i.shape[0] for i in imgs)
     out = []
     for i in imgs:
@@ -137,14 +145,14 @@ def side_by_side(*imgs, gap=10, bg=255) -> np.ndarray:
     return np.hstack(out[:-1])
 
 
-PATH_COLORS = [(110, 110, 110), (255, 0, 0), (0, 160, 0), (0, 0, 255), (200, 0, 200), (0, 140, 255), (120, 120, 0)]  # 0번 = 회색(오라클/기준용)
+PATH_COLORS = [(110, 110, 110), (255, 0, 0), (0, 160, 0), (0, 0, 255), (200, 0, 200), (0, 140, 255), (120, 120, 0)]  # 0번은 회색. 오라클/기준 경로용.
 
 
 def magnify_offsets(track: Track, xy: np.ndarray, factor: float) -> np.ndarray:
-    """경로의 '중심선 대비 편차'만 factor 배로 부풀린다 (경로 자체 위치는 유지).
+    """중심선 대비 편차만 factor 배로 부풀린다. 경로가 놓인 위치 자체는 유지.
 
-    60 m 트랙에서 주행 경로들의 차이는 수 cm라 전체 맵에서는 1~2 px 로 겹쳐 보인다. 그림에서만 편차를
-    과장해 비교할 수 있게 한다. factor=1 이면 원본 그대로.
+    160 m 트랙에서 주행 경로들의 차이는 수 cm 라 전체 맵에 그리면 1~2 px 로 겹쳐 버린다.
+    비교해 보려고 그림에서만 과장하는 것이고, 실제 위치가 아니다. factor=1 이면 원본.
     """
     xy = np.asarray(xy, float)[:, :2]
     if factor == 1.0 or len(xy) == 0:
@@ -158,20 +166,19 @@ def magnify_offsets(track: Track, xy: np.ndarray, factor: float) -> np.ndarray:
 def draw_paths_on_map(mapimg: MapImage, track: Track, cfg: Config, paths: dict, thickness: int = 1,
                       crop_margin_m: float = 2.0, legend: bool = True, dashed: bool = True,
                       magnify: float = 1.0):
-    """전체 맵 위에 GT 경로(중심선, 검은 점선)와 주행 경로들을 겹쳐 그린다.
+    """맵 위에 GT 중심선(검은 점선)과 주행 경로들을 겹쳐 그린다.
 
-    경로들이 거의 겹치므로 얇게 그리고, dashed=True 면 경로마다 다른 파선 패턴으로 구분한다.
-    magnify > 1 이면 중심선 대비 편차를 그 배수만큼 과장해 그린다 (비교용. 실제 위치가 아님).
-    범례는 그림 위 흰 띠에 실제 패턴으로 표시한다. paths: {label: (N,2) world xy 또는 (N,3) pose}.
-    반환: (img_bgr, offset_px) — offset 은 원본 맵 픽셀 기준이며 범례 띠 높이가 이미 반영돼 있다.
+    경로들이 거의 겹쳐서 얇게 그리고, dashed=True 면 파선 패턴과 위상을 달리해 구분한다.
+    paths 는 {라벨: (N,2) world xy 또는 (N,3) pose}. 반환은 (img, offset_px) 이고
+    offset 에는 범례 띠 높이가 이미 반영돼 있다.
     """
     img, off = draw_track_on_map(mapimg, track, cfg, crop_margin_m)
     c = np.round(mapimg.world_to_px(track.center) - off).astype(np.int32)
-    for k in range(0, len(c), 6):                      # 점선 중심선
+    for k in range(0, len(c), 6):                      # 중심선은 점선
         cv2.line(img, tuple(c[k]), tuple(c[(k + 3) % len(c)]), (0, 0, 0), 1, cv2.LINE_AA)
 
     def _draw(dst, px, col, on, off_, phase):
-        """px 를 (on, off_) 픽셀 패턴의 파선으로 그린다. on=0 이면 실선."""
+        """(on, off_) 픽셀 패턴의 파선. on=0 이면 실선."""
         if on <= 0:
             cv2.polylines(dst, [px.reshape(-1, 1, 2)], False, col, thickness, cv2.LINE_AA)
             return
@@ -194,16 +201,16 @@ def draw_paths_on_map(mapimg: MapImage, track: Track, cfg: Config, paths: dict, 
     for i, (label, xy) in enumerate(paths.items()):
         col = PATH_COLORS[i % len(PATH_COLORS)]
         on, off_ = (0, 0) if not dashed or i == 0 else (14, 8)
-        phase = 0 if not dashed else i * 6              # 같은 패턴이라도 위상을 어긋나게
+        phase = 0 if not dashed else i * 6              # 패턴이 같아도 위상을 어긋나게
         xy = magnify_offsets(track, xy, magnify)
         if len(xy) == 0:
             continue
         px = np.round(mapimg.world_to_px(xy) - off).astype(np.int32)
         _draw(img, px, col, on, off_, phase)
-        cv2.circle(img, tuple(px[0]), 5, col, 1, cv2.LINE_AA)          # 시작: 빈 원
-        cv2.circle(img, tuple(px[-1]), 6, col, -1, cv2.LINE_AA)        # 끝: 채운 원
+        cv2.circle(img, tuple(px[0]), 5, col, 1, cv2.LINE_AA)          # 시작은 빈 원
+        cv2.circle(img, tuple(px[-1]), 6, col, -1, cv2.LINE_AA)        # 끝은 채운 원
         if legend:
-            sample = np.array([[12, y0 - 5], [56, y0 - 5]], np.int32)  # 범례에도 같은 패턴
+            sample = np.array([[12, y0 - 5], [56, y0 - 5]], np.int32)  # 범례에도 같은 패턴으로
             _draw(img, sample, col, on, off_, phase)
             cv2.putText(img, label, (64, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1, cv2.LINE_AA)
             y0 += 20
@@ -211,7 +218,7 @@ def draw_paths_on_map(mapimg: MapImage, track: Track, cfg: Config, paths: dict, 
 
 
 def crop_around(img: np.ndarray, offset_px, mapimg: MapImage, xy_world, half_m: float = 4.0, scale: int = 3):
-    """맵 그림에서 world 점 주변 half_m 반경을 잘라 scale 배 확대."""
+    """맵 그림에서 world 한 점 주변을 잘라 확대한다."""
     c = np.round(mapimg.world_to_px(np.asarray(xy_world, float)[:2]) - offset_px).astype(int)
     r = int(half_m / mapimg.res)
     x0, y0 = max(c[0] - r, 0), max(c[1] - r, 0)
@@ -220,16 +227,17 @@ def crop_around(img: np.ndarray, offset_px, mapimg: MapImage, xy_world, half_m: 
 
 
 def to_h264(src: str, dst: str = None, max_width: int = 960, crf: int = 28) -> str:
-    """OpenCV가 쓴 mp4v 영상을 H.264(yuv420p)로 변환한다. 브라우저·VSCode의 HTML5 비디오는 mp4v를 재생하지 못한다.
+    """OpenCV 가 쓴 mp4v 를 H.264 로 다시 인코딩한다.
 
-    ffmpeg는 imageio-ffmpeg 패키지가 번들한 실행 파일을 쓴다(시스템 설치 불필요). 반환: 변환된 파일 경로.
+    브라우저와 VSCode 의 HTML5 비디오는 mp4v 를 재생하지 못해서, 이걸 안 거치면 셀에 검은 화면만 뜬다.
+    ffmpeg 는 imageio-ffmpeg 가 번들한 걸 쓰므로 시스템에 따로 설치할 필요는 없다.
     """
     import subprocess
     import imageio_ffmpeg
     if dst is None:
         base, _ = os.path.splitext(src)
         dst = base + "_h264.mp4"
-    vf = f"scale='min({max_width},iw)':-2"          # 폭 제한, 높이는 짝수로
+    vf = f"scale='min({max_width},iw)':-2"          # 폭 제한, 높이는 짝수로 (yuv420p 요구사항)
     cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-i", src,
            "-vf", vf, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(crf), "-movflags", "+faststart", dst]
     subprocess.run(cmd, check=True)

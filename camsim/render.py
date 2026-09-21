@@ -1,9 +1,13 @@
-"""pose + 테이프 quad + (선택) LiDAR scan -> 합성 전방 카메라 이미지."""
+"""테이프 트랙을 그린다. 앞에서 본 카메라 뷰와 위에서 본 BEV 두 가지.
+
+모델에 넣는 건 BEV 쪽이다. 원근 렌더(render)는 눈으로 확인하거나 IPM 과 비교할 때 쓴다.
+"""
 import cv2
 import numpy as np
 from .config import Config
 from .camera import project
 
+# fillPoly 의 고정소수점 좌표. 1/16 px 단위로 그려서 테이프 가장자리가 계단지지 않게 한다.
 _SHIFT = 4
 _SCALE = 1 << _SHIFT
 
@@ -11,38 +15,37 @@ _SCALE = 1 << _SHIFT
 def to_vehicle(pose, pts_world: np.ndarray) -> np.ndarray:
     x, y, th = pose
     c, s = np.cos(th), np.sin(th)
-    A = np.array([[c, -s], [s, c]])          # rows of R(th); (p - o) @ A == R(-th) (p - o)
+    A = np.array([[c, -s], [s, c]])          # A 의 행이 R(th) 라서 (p - o) @ A 가 곧 R(-th)(p - o)
     return (np.asarray(pts_world, dtype=np.float64) - [x, y]) @ A
 
 
 def visible_quads(qv: np.ndarray, scan, cfg: Config) -> np.ndarray:
-    """qv: (M,4,2) vehicle-frame quads. Returns bool mask of quads to draw.
+    """그릴 quad 만 골라내는 bool 마스크. qv 는 (M,4,2) 차량 좌표계.
 
-    Near/far culling must be relative to the camera, not the vehicle origin: with
-    camera.offset_x_m > 0 the camera sits ahead of the rear axle, so a quad at
-    vehicle-frame x in (0, offset_x_m) is actually *behind* the camera and would
-    otherwise pass a vehicle-relative near check, get projected with a flipped
-    (negative-depth) homogeneous coordinate, and appear mirrored above the horizon.
-    LiDAR range/bearing stay vehicle-relative: the scan comes from gym at the
-    vehicle pose, not the (assumed) camera pose.
+    near/far 컷은 차량 원점이 아니라 **카메라** 기준이어야 한다. offset_x_m > 0 이면 카메라가
+    후륜축보다 앞에 있어서, 차량 기준 x 가 0~offset_x_m 인 quad 는 실제로는 카메라 뒤에 있다.
+    이걸 놓치면 깊이가 음수인 채로 투영돼서 지평선 위에 거꾸로 나타난다. 실제로 겪은 버그다.
+
+    LiDAR 가림은 반대로 차량 기준을 쓴다. scan 이 카메라가 아니라 차량 pose 에서 나오기 때문.
     """
     ctr = qv.mean(1)
     off = cfg.camera.offset_x_m
-    xc = qv[:, :, 0] - off                            # camera-frame forward coordinate
-    rng = np.hypot(ctr[:, 0], ctr[:, 1])               # vehicle-origin range, for LiDAR
-    cam_rng = np.hypot(ctr[:, 0] - off, ctr[:, 1])     # camera-origin range, for the far cut
+    xc = qv[:, :, 0] - off                             # 카메라 기준 전방 거리
+    rng = np.hypot(ctr[:, 0], ctr[:, 1])               # 차량 원점 기준. LiDAR 용
+    cam_rng = np.hypot(ctr[:, 0] - off, ctr[:, 1])     # 카메라 기준. far 컷 용
     keep = (xc.min(1) > cfg.render.near_m) & (cam_rng < cfg.render.far_m)
     if scan is not None:
         scan = np.asarray(scan)
         fov = cfg.render.lidar_fov_rad
         brg = np.arctan2(ctr[:, 1], ctr[:, 0])
-        # gym lays out beam i at angle -fov/2 + i*fov/(n-1), i.e. n-1 steps span fov.
+        # gym 은 빔 i 를 -fov/2 + i*fov/(n-1) 에 둔다. n-1 스텝이 fov 를 덮는다는 뜻.
         idx = np.rint((brg + fov / 2.0) / fov * (len(scan) - 1)).astype(int).clip(0, len(scan) - 1)
         keep &= rng < scan[idx]
     return keep
 
 
 def render(pose, quads_world: np.ndarray, scan, H_g2i: np.ndarray, cfg: Config) -> np.ndarray:
+    """앞에서 본 카메라 뷰. scan 을 주면 다른 차에 가린 테이프는 빠진다."""
     W, Hh = cfg.camera.image_width, cfg.camera.image_height
     img = np.empty((Hh, W, 3), np.uint8)
     img[:] = cfg.lane.color_floor
@@ -64,18 +67,17 @@ def draw_points(img, pts_vehicle, H_g2i, color=(0, 255, 0), radius=4):
     return img
 
 
-# ---- BEV (top-down) ----------------------------------------------------------
-# BEV 픽셀 규약: 위 = 전방(+x), 왼쪽 = 차량 좌측(+y). 범위·해상도는 config의 bev 섹션.
+# ---- BEV (위에서 본 그림) -----------------------------------------------------
+# 픽셀 규약: 위 = 전방(+x), 왼쪽 = 차량 좌측(+y). 범위와 해상도는 config 의 bev 섹션.
 
 def bev_size(cfg: Config):
-    """(height, width) in pixels of the BEV image."""
     b = cfg.bev
     return (int(round((b.x_range_m[1] - b.x_range_m[0]) / b.resolution_m)),
             int(round((b.y_range_m[1] - b.y_range_m[0]) / b.resolution_m)))
 
 
 def bev_pixels(pts_vehicle: np.ndarray, cfg: Config) -> np.ndarray:
-    """Vehicle-frame ground points (...,2) m -> BEV pixel coords (...,2) (u right, v down)."""
+    """차량 좌표계 지면점 (...,2) m -> BEV 픽셀 (...,2)."""
     b = cfg.bev
     p = np.asarray(pts_vehicle, dtype=np.float64)
     u = (b.y_range_m[1] - p[..., 1]) / b.resolution_m
@@ -84,7 +86,7 @@ def bev_pixels(pts_vehicle: np.ndarray, cfg: Config) -> np.ndarray:
 
 
 def ground_to_bev_matrix(cfg: Config) -> np.ndarray:
-    """3x3 affine mapping ground (x, y, 1) -> BEV pixel (u, v, 1). Same convention as bev_pixels."""
+    """bev_pixels 와 같은 변환을 3x3 행렬로. warpPerspective 에 넘길 때 쓴다."""
     b = cfg.bev
     r = b.resolution_m
     return np.array([[0.0, -1.0 / r, b.y_range_m[1] / r],
@@ -93,11 +95,11 @@ def ground_to_bev_matrix(cfg: Config) -> np.ndarray:
 
 
 def bev_visibility_mask(H_g2i: np.ndarray, cfg: Config) -> np.ndarray:
-    """BEV 픽셀 중 카메라가 실제로 볼 수 있는 곳(bool, (h,w)).
+    """BEV 픽셀 중 카메라가 실제로 볼 수 있는 곳만 True 인 (h,w) 마스크.
 
-    실차 IPM 출력은 카메라 화각 밖·근거리 사각 영역이 비어 있다(warp 경계값). 시뮬 BEV도 같은 영역을
-    바닥색으로 가려야 모델 입력이 실차와 일치한다. 픽셀 중심의 지면 좌표를 카메라로 투영해 이미지 안에
-    떨어지고(깊이 > 0) 근거리 컬링(near_m)을 통과하는지 본다.
+    실차 IPM 출력은 화각 밖과 코앞 사각지대가 비어 있다. 시뮬 BEV 도 같은 데를 가려줘야
+    모델이 보는 그림이 실차와 같아진다. 픽셀 중심을 지면 좌표로 바꿔 카메라에 투영해 보고,
+    이미지 안에 떨어지는지(깊이 > 0) near 컷을 통과하는지 본다.
     """
     h, w = bev_size(cfg)
     b = cfg.bev
@@ -115,10 +117,10 @@ def bev_visibility_mask(H_g2i: np.ndarray, cfg: Config) -> np.ndarray:
 
 
 def render_bev(pose, quads_world: np.ndarray, cfg: Config, mask: np.ndarray = None) -> np.ndarray:
-    """시뮬 BEV: 테이프 quad를 지오메트리에서 직접 top-down으로 그린다 (원근 렌더·IPM을 거치지 않음).
+    """모델 입력용 BEV. 테이프를 지오메트리에서 바로 위에서 내려다본 모양으로 그린다.
 
-    mask(bev_visibility_mask)를 주면 카메라가 못 보는 영역을 바닥색으로 가려 실차 IPM 출력과 같은 모양이 된다.
-    학습 데이터와 폐루프 입력은 이 함수로 만든다.
+    원근 렌더나 IPM 을 거치지 않으므로 빠르고 정확하다. mask(bev_visibility_mask)를 주면
+    카메라가 못 보는 영역이 바닥색으로 덮여 실차 IPM 출력과 같은 모양이 된다.
     """
     h, w = bev_size(cfg)
     img = np.empty((h, w, 3), np.uint8)
@@ -138,7 +140,6 @@ def render_bev(pose, quads_world: np.ndarray, cfg: Config, mask: np.ndarray = No
 
 
 def draw_points_bev(img_bev, pts_vehicle, cfg: Config, color=(0, 255, 0), radius=5):
-    """BEV 이미지 위에 차량 좌표계 점(예: waypoint)을 찍는다."""
     for u, v in bev_pixels(np.asarray(pts_vehicle, float).reshape(-1, 2), cfg):
         if 0 <= u < img_bev.shape[1] and 0 <= v < img_bev.shape[0]:
             cv2.circle(img_bev, (int(round(u)), int(round(v))), radius, color, -1, cv2.LINE_AA)
@@ -146,7 +147,7 @@ def draw_points_bev(img_bev, pts_vehicle, cfg: Config, color=(0, 255, 0), radius
 
 
 def ipm_bev(img_perspective: np.ndarray, H_i2g: np.ndarray, cfg: Config) -> np.ndarray:
-    """실차 2주차 IPM과 같은 연산: 원근 영상을 H_i2g로 지면에 펴서 BEV 규격으로 warp한다."""
+    """실차가 쓰는 경로. 원근 영상을 H_i2g 로 지면에 펴서 BEV 규격으로 맞춘다."""
     h, w = bev_size(cfg)
     H_img2bev = ground_to_bev_matrix(cfg) @ H_i2g
     floor = tuple(int(c) for c in cfg.lane.color_floor)

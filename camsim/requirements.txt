@@ -1,8 +1,13 @@
-# camsim 의존성 (코랩용). gym 0.19.0은 camsim/scripts/install_gym019.sh 로 따로 설치한다.
-# 코랩 순서: pip install -r camsim/requirements.txt  ->  bash camsim/scripts/install_gym019.sh  ->  pip install --no-deps -e .
-# f110_gym의 setup.py는 numpy<=1.22를 요구하지만 코랩 Python(3.13)에는 그 wheel이 없다.
-# numpy 2.x로도 f110_gym이 정상 동작함을 확인했으므로(테스트 60개 통과) numpy는 핀하지 않고 --no-deps 로 설치한다.
-# numpy를 여기서 바꾸면 런타임 재시작이 필요해지고, 재시작 없이 진행하면 'numpy.dtype size changed' 오류가 난다.
+# 코랩용. gym 0.19.0 은 setup.py 에 오타가 있어서 camsim/scripts/install_gym019.sh 로 따로 설치한다.
+#
+# 설치 순서
+#   pip install -r camsim/requirements.txt
+#   bash camsim/scripts/install_gym019.sh
+#   pip install --no-deps -e .
+#
+# f110_gym 의 setup.py 는 numpy<=1.22 를 요구하지만 코랩 Python(3.13)에는 그 wheel 이 없다.
+# numpy 2.x 로도 잘 도는 걸 확인했으므로 numpy 는 건드리지 않고 --no-deps 로 설치한다.
+# 여기서 numpy 를 바꾸면 런타임 재시작이 필요해지고, 안 하면 'numpy.dtype size changed' 가 난다.
 opencv-python-headless
 pyyaml
 pytest
@@ -12,6 +17,6 @@ pillow
 pyglet<1.5
 pyopengl
 torch
-imageio-ffmpeg     # mp4v -> H.264 변환 (노트북·브라우저에서 영상 재생용)
+imageio-ffmpeg     # mp4v -> H.264 변환. 이거 없으면 주행 영상이 셀에서 안 재생된다
 matplotlib         # 코랩엔 기본 설치. 로컬 노트북 환경용
 pandas

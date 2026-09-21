@@ -1,16 +1,13 @@
-"""BEV 이미지 증강 (sim-to-real 갭 줄이기).
+"""BEV 증강. sim-to-real 갭을 줄이려고 시뮬 그림을 일부러 지저분하게 만든다.
 
-모델 입력이 BEV 이므로 증강도 BEV 에 직접 넣는다. 라벨(waypoint)은 지오메트리 참값이라 증강으로 바뀌지 않는다.
-따라서 **정답을 옮기는 변형(이동·회전·스케일)은 넣으면 안 되고**, "같은 장면의 다른 관측"만 만들어야 한다.
-예외는 `jitter_bev` 로, 실차에서 pitch 가 변하면 IPM 결과 자체가 휘므로 관측 변화가 맞다.
+지켜야 할 규칙이 하나 있다. 라벨(waypoint)은 지오메트리 참값이라 증강으로 바뀌지 않는다.
+그래서 **정답을 옮기는 변형(이동·회전·스케일)은 넣으면 안 된다.** "같은 장면을 다르게 본 것"만 된다.
+예외는 jitter_bev 하나다. 실차에서 pitch 가 변하면 IPM 결과 자체가 휘니까 그건 진짜 관측 변화다.
 
-함수는 모두 `f(bev_bgr, cfg, rng) -> bev_bgr` 이고, 세기는 `config.yaml` 의 `augment:` 섹션에서 온다.
-기본값은 전부 "변화 없음"이라, 학생이 노트북에서 값을 켜야 효과가 난다.
+전부 f(bev, cfg, rng) -> bev 꼴이고, 세기는 config.yaml 의 augment 섹션에서 온다.
+기본값은 전부 "변화 없음"이라 학생이 값을 켜야 효과가 난다.
 
-  기하   : jitter_bev(pitch 변화), ipm_blur(원거리 해상도 저하), erase_patches(테이프 마모)
-  조명   : brightness_contrast, gamma, hsv_shift, illumination, shadow
-  센서   : blur, noise, jpeg
-  조합   : example_augment (위를 순서대로 적용하는 참고용 체인)
+주의: jitter_bev 말고는 실제 카메라 물리의 대충 근사다. 실차 영상을 찍어 보고 다시 설계하는 게 맞다.
 """
 import cv2
 import numpy as np
@@ -21,18 +18,11 @@ from .render import ground_to_bev_matrix
 
 # ---- 기하 -------------------------------------------------------------------
 
-def jitter_pitch(cfg: Config, rng: np.random.Generator) -> np.ndarray:
-    """pitch 를 ±pitch_jitter_deg 안에서 흔든 H_g2i. (원근 렌더용. BEV 학습에는 jitter_bev 를 쓴다.)"""
-    j = cfg.augment.pitch_jitter_deg
-    d = rng.uniform(-j, j) if j > 0 else 0.0
-    return build(cfg, pitch_deg=cfg.camera.pitch_deg + d)[0]
-
-
 def jitter_bev(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
-    """pitch 가 δ만큼 틀어진 카메라 영상을 '공칭' H_i2g 로 IPM 했을 때의 BEV 왜곡을 재현한다.
+    """pitch 가 틀어진 카메라 영상을 공칭 H_i2g 로 IPM 했을 때 생기는 왜곡.
 
-    참 지면점 -> (pitch+δ 카메라) 이미지 -> (공칭 H_i2g) 지면 -> BEV 픽셀. 가감속 시 서스펜션이 물러
-    IPM 평면 가정이 깨지는 현상이고, 먼 곳일수록 크게 휜다. 기하학적으로 정확한 유일한 증강이다.
+    가감속하면 서스펜션이 물러서 카메라가 까딱하고, IPM 의 평면 가정이 깨진다. 먼 곳일수록 크게 휜다.
+    경로는 참 지면점 -> (pitch+δ 카메라) 이미지 -> (공칭 H_i2g) 지면 -> BEV 픽셀.
     """
     j = cfg.augment.pitch_jitter_deg
     if j <= 0:
@@ -49,44 +39,32 @@ def jitter_bev(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.nda
 
 
 def ipm_blur(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
-    """전방 거리에 비례해 커지는 블러. 실차 IPM 은 먼 곳일수록 카메라 픽셀 하나가 넓은 바닥을 덮어 뭉개진다.
+    """전방 거리에 비례해 커지는 블러.
 
-    BEV 위쪽(먼 곳)일수록 강한 GaussianBlur 를 준 여러 장을 만들어 행 구간별로 이어 붙인다.
-    세기: `ipm_blur_max_px` (BEV 맨 위 행에서의 커널 크기. 0 이면 사용 안 함).
+    실차 IPM 은 먼 곳일수록 카메라 픽셀 하나가 넓은 바닥을 덮어서 뭉개진다. 거리별로 정확히
+    계산하는 대신 행 구간을 나눠 점점 강한 GaussianBlur 를 이어 붙였다.
     """
     kmax = int(cfg.augment.ipm_blur_max_px)
     if kmax < 3:
         return bev
     h = bev.shape[0]
-    levels = list(range(3, kmax + 1, 2))                  # 홀수 커널만
+    levels = list(range(3, kmax + 1, 2))                     # 커널은 홀수만
     if not levels:
         return bev
     out = bev.copy()
-    edges = np.linspace(0, h, len(levels) + 1).astype(int)   # 위(먼 곳)부터 강한 블러
+    edges = np.linspace(0, h, len(levels) + 1).astype(int)   # 위(먼 곳)부터 강하게
     for k, lvl in enumerate(reversed(levels)):
         y0, y1 = edges[k], edges[k + 1]
-        pad = lvl
+        pad = lvl                                            # 구간 경계에 선이 생기지 않게 여유를 두고 블러
         a, b = max(0, y0 - pad), min(h, y1 + pad)
         blurred = cv2.GaussianBlur(bev[a:b], (lvl, lvl), 0)
         out[y0:y1] = blurred[y0 - a:y1 - a]
     return out
 
 
-def dropout_quads(quads: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
-    """렌더 전에 테이프 사각형을 연속 구간으로 제거한다 (테이프가 실제로 뜯긴 상태)."""
-    if rng.uniform() >= cfg.augment.tape_dropout_prob or len(quads) == 0:
-        return quads
-    lo, hi = cfg.augment.tape_dropout_len
-    n = int(rng.integers(lo, hi + 1))
-    start = int(rng.integers(0, max(1, len(quads) - n)))
-    mask = np.ones(len(quads), bool)
-    mask[start:start + n] = False
-    return quads[mask]
-
-
 def erase_patches(bev: np.ndarray, cfg: Config, rng: np.random.Generator, n_max: int = 3,
                   size_px=(10, 60)) -> np.ndarray:
-    """BEV 위 임의 사각형을 바닥색으로 지운다 (테이프 마모·다른 차의 가림을 이미지 수준에서 근사)."""
+    """임의 사각형을 바닥색으로 지운다. 테이프가 벗겨졌거나 뭔가에 가린 상황."""
     if rng.uniform() >= cfg.augment.tape_dropout_prob:
         return bev
     out = bev.copy()
@@ -99,10 +77,10 @@ def erase_patches(bev: np.ndarray, cfg: Config, rng: np.random.Generator, n_max:
     return out
 
 
-# ---- 조명 (OpenCV 표준 기법) --------------------------------------------------
+# ---- 조명 -------------------------------------------------------------------
 
 def brightness_contrast(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
-    """cv2.convertScaleAbs 로 밝기(beta)·대비(alpha) 변경. 노출·조도 변화에 해당."""
+    """노출·조도 변화. convertScaleAbs 의 alpha(대비) / beta(밝기)."""
     a = cfg.augment.contrast_range
     b = cfg.augment.brightness_delta
     alpha = rng.uniform(a[0], a[1])
@@ -113,7 +91,7 @@ def brightness_contrast(bev: np.ndarray, cfg: Config, rng: np.random.Generator) 
 
 
 def gamma(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
-    """LUT 감마 보정. 카메라 감마·톤커브 차이, 어두운 곳의 디테일 변화."""
+    """카메라 톤커브 차이. 어두운 쪽 디테일이 특히 달라진다."""
     lo, hi = cfg.augment.gamma_range
     if lo == 1.0 and hi == 1.0:
         return bev
@@ -123,42 +101,43 @@ def gamma(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
 
 
 def hsv_shift(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
-    """HSV 색상·채도 변경. 색온도(백열/형광/자연광)에 따라 테이프 색이 달라 보이는 것."""
+    """조명 색온도. 백열등 아래 노란 테이프와 형광등 아래 노란 테이프는 다른 색이다."""
     dh = cfg.augment.hue_shift_deg
     slo, shi = cfg.augment.sat_scale
     if dh == 0 and slo == 1.0 and shi == 1.0:
         return bev
     hsv = cv2.cvtColor(bev, cv2.COLOR_BGR2HSV).astype(np.int16)
-    if dh:                                        # OpenCV hue 는 0..179 (도의 절반)
-        hsv[..., 0] = (hsv[..., 0] + int(rng.uniform(-dh, dh) / 2)) % 180
+    if dh:
+        hsv[..., 0] = (hsv[..., 0] + int(rng.uniform(-dh, dh) / 2)) % 180   # OpenCV hue 는 0..179
     if not (slo == 1.0 and shi == 1.0):
         hsv[..., 1] = np.clip(hsv[..., 1] * rng.uniform(slo, shi), 0, 255)
     return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
 
 def illumination(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
-    """불균일 조명: 부드러운 밝기 기울기를 곱한다. 천장 조명이 한쪽만 밝은 실습실 상황.
+    """천장 조명이 한쪽만 밝은 실습실. 부드러운 밝기 기울기를 곱한다.
 
-    세기 s(`illum_strength`) 이면 배율이 1-s ~ 1+s 사이에서 화면을 가로지르며 완만히 변한다.
+    세기 s 면 배율이 1-s ~ 1+s 사이에서 화면을 가로지르며 완만히 변한다. 방향은 매번 랜덤.
     """
     s = float(cfg.augment.illum_strength)
     if s <= 0:
         return bev
     h, w = bev.shape[:2]
-    th = rng.uniform(0, 2 * np.pi)                       # 밝아지는 방향
+    th = rng.uniform(0, 2 * np.pi)
     ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
-    t = (np.cos(th) * xs / w + np.sin(th) * ys / h)      # -1..1 범위의 선형 기울기
-    t = (t - t.min()) / max(float(t.max() - t.min()), 1e-6) * 2 - 1
+    t = (np.cos(th) * xs / w + np.sin(th) * ys / h)
+    t = (t - t.min()) / max(float(t.max() - t.min()), 1e-6) * 2 - 1        # -1..1 로 정규화
     field = (1.0 + s * t)[..., None]
     return np.clip(bev.astype(np.float32) * field, 0, 255).astype(np.uint8)
 
 
 def shadow(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
-    """임의의 볼록 다각형 영역을 어둡게 (구조물·사람 그림자). 경계는 블러로 부드럽게."""
+    """구조물이나 사람 그림자. 볼록 다각형을 어둡게 하고 경계는 블러로 흐린다."""
     if rng.uniform() >= cfg.augment.shadow_prob:
         return bev
     h, w = bev.shape[:2]
     n = int(rng.integers(3, 6))
+    # 화면 밖까지 꼭짓점을 뿌려야 그림자가 화면을 가로질러 걸친 모양이 나온다.
     pts = np.column_stack([rng.integers(-w // 4, w + w // 4, n), rng.integers(-h // 4, h + h // 4, n)])
     mask = np.zeros((h, w), np.float32)
     cv2.fillConvexPoly(mask, cv2.convexHull(pts.astype(np.int32)), 1.0, cv2.LINE_AA)
@@ -168,19 +147,19 @@ def shadow(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray
     return np.clip(bev.astype(np.float32) * (1 - mask * (1 - dark)), 0, 255).astype(np.uint8)
 
 
-# ---- 센서 --------------------------------------------------------------------
+# ---- 센서 -------------------------------------------------------------------
 
 def blur(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
-    """GaussianBlur. 초점 흐림·모션 블러의 단순 근사 (글로벌 셔터라 실제 모션 블러는 작다)."""
+    """초점 흐림. 글로벌 셔터라 실제 모션 블러는 작아서 이 정도로 뭉뚱그렸다."""
     kmax = int(cfg.augment.blur_max_px)
     if kmax < 3:
         return bev
-    k = int(rng.integers(1, (kmax + 1) // 2 + 1)) * 2 - 1     # 홀수
+    k = int(rng.integers(1, (kmax + 1) // 2 + 1)) * 2 - 1     # 홀수 커널
     return bev if k < 3 else cv2.GaussianBlur(bev, (k, k), 0)
 
 
 def noise(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
-    """가우시안 센서 노이즈 (게인을 올렸을 때)."""
+    """게인을 올렸을 때의 센서 노이즈."""
     s = float(cfg.augment.noise_sigma)
     if s <= 0:
         return bev
@@ -188,7 +167,7 @@ def noise(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
 
 
 def jpeg(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
-    """JPEG 압축 아티팩트. ROS image_transport compressed 를 쓰면 실차 입력에 이게 섞인다."""
+    """JPEG 아티팩트. ROS image_transport 의 compressed 를 쓰면 실차 입력에 이게 섞인다."""
     lo, hi = cfg.augment.jpeg_quality
     if lo >= 100 and hi >= 100:
         return bev
@@ -197,12 +176,12 @@ def jpeg(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
     return cv2.imdecode(enc, cv2.IMREAD_COLOR) if ok else bev
 
 
-# ---- 조합 --------------------------------------------------------------------
+# ---- 조합 -------------------------------------------------------------------
 
 def example_augment(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarray:
-    """참고용 체인: 기하 -> 조명 -> 센서 순서. 실제 촬영 과정과 같은 순서다.
+    """기하 -> 조명 -> 센서 순으로 다 적용해 본 체인. 실제 촬영에서 일어나는 순서다.
 
-    config 의 세기가 전부 기본값(0/1.0)이면 항등 함수다. 노트북 과제에서 my_augment 의 출발점으로 쓴다.
+    config 세기가 전부 기본값이면 그냥 항등 함수다. 노트북 과제에서 my_augment 의 출발점으로 쓴다.
     """
     for fn in (jitter_bev, ipm_blur, erase_patches,
                illumination, shadow, brightness_contrast, gamma, hsv_shift,

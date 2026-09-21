@@ -1,22 +1,24 @@
-"""가정 카메라(화각, 높이, pitch) 또는 실측 H_i2g 파일에서 지면<->이미지 homography를 만든다.
+"""지면 <-> 이미지 homography.
 
-frames
-  vehicle : x forward, y left, z up, origin at rear axle on the ground
-  camera  : x right, y down, z forward (OpenCV)
-  image   : u right, v down (pixels)
-H_g2i maps ground (x, y, 1) -> image (u, v, w).  H_i2g = inv(H_g2i).
+카메라 가정값(화각/높이/pitch)으로 만들거나, 캘리브레이션으로 실측한 H 파일을 읽는다.
+
+좌표계
+  vehicle : 후륜축이 원점, x 전방, y 좌측, z 위
+  camera  : x 우, y 아래, z 전방 (OpenCV 규약)
+  image   : u 우, v 아래 (px)
+
+H_g2i 는 지면 (x, y, 1) -> 이미지 (u, v, w), H_i2g 는 그 역행렬.
 """
 import os
 import numpy as np
 from .config import Config
 
-# vehicle -> camera axes, pitch 0:  x_c = -y_v, y_c = -z_v, z_c = x_v
+# pitch 0 일 때 vehicle -> camera 축 대응: x_c = -y_v, y_c = -z_v, z_c = x_v
 _R_VC = np.array([[0.0, -1.0, 0.0],
                   [0.0, 0.0, -1.0],
                   [1.0, 0.0, 0.0]])
 
-# Cache of loaded h_i2g_file matrices, keyed by absolute path, so build() does not
-# hit the disk on every call (it may be called once per rendered frame).
+# build() 가 프레임마다 불릴 수 있어서 실측 H 파일은 경로별로 캐시해 둔다.
 _H_FILE_CACHE: dict = {}
 
 
@@ -31,14 +33,14 @@ def intrinsics(cfg: Config) -> np.ndarray:
 
 
 def extrinsics(cfg: Config, pitch_deg: float) -> np.ndarray:
-    """Return 3x4 [R | t] with p_c = R p_v + t."""
+    """p_c = R p_v + t 의 [R | t] (3x4)."""
     th = np.deg2rad(pitch_deg)
-    # rotate about camera x axis: positive pitch tilts the optical axis toward +y_c (down)
+    # 카메라 x 축 회전. pitch 가 +면 광축이 +y_c(아래)로 기운다.
     Rx = np.array([[1.0, 0.0, 0.0],
                    [0.0, np.cos(th), -np.sin(th)],
                    [0.0, np.sin(th), np.cos(th)]])
     R = Rx @ _R_VC
-    C = np.array([cfg.camera.offset_x_m, 0.0, cfg.camera.height_m])  # camera center in vehicle frame
+    C = np.array([cfg.camera.offset_x_m, 0.0, cfg.camera.height_m])   # vehicle 기준 카메라 중심
     t = -R @ C
     return np.hstack([R, t[:, None]])
 
@@ -55,25 +57,22 @@ def _load_h_i2g_file(path: str) -> np.ndarray:
 
 
 def _assumed_h_g2i(cfg: Config, pitch_deg: float) -> np.ndarray:
-    """H_g2i from the assumed camera model (hfov/height/pitch/offset), not the measured file."""
+    """실측 파일 말고 카메라 가정값으로만 만든 H_g2i."""
     Rt = extrinsics(cfg, pitch_deg)
-    H_g2i = intrinsics(cfg) @ Rt[:, [0, 1, 3]]   # ground plane z_v = 0
-    # Normalize by the Frobenius norm rather than H_g2i[2, 2]: for offset_x_m=0 at
-    # pitch_deg=0 (the default config), H_g2i[2, 2] is exactly 0 (it is the depth of
-    # ground point (0, 0), which sits at zero forward distance from the camera), so
-    # dividing by it produces NaN/Inf. The norm is always nonzero for an invertible H
-    # and project() is scale-invariant, so this does not change any projected result.
+    H_g2i = intrinsics(cfg) @ Rt[:, [0, 1, 3]]            # 지면은 z_v = 0 이라 3번째 열을 뺀다
+    # H_g2i[2, 2] 로 정규화하면 안 된다. 기본 config(offset_x_m=0, pitch_deg=0)에서는 그 값이
+    # 정확히 0이라 NaN 이 된다 (지면 원점이 카메라 바로 아래라 전방 거리가 0이다).
+    # project() 는 스케일에 무관하므로 Frobenius norm 으로 나눠도 결과는 똑같다.
     H_g2i /= np.linalg.norm(H_g2i)
     return H_g2i
 
 
 def build(cfg: Config, pitch_deg=None):
-    """Return (H_g2i, H_i2g). A measured H_i2g file, if configured, wins over the assumed camera.
+    """(H_g2i, H_i2g) 를 준다. h_i2g_file 이 설정돼 있으면 그쪽이 카메라 가정값을 이긴다.
 
-    If a pitch_deg override is requested that differs from cfg.camera.pitch_deg (e.g. augment's
-    pitch jitter), the measured H is corrected by the *delta* between the assumed camera at the
-    configured pitch and at the requested pitch, rather than being silently ignored:
-    H_g2i = H_file @ inv(H_assumed(cfg.pitch_deg)) @ H_assumed(pitch_deg).
+    실측 H 를 쓰면서 pitch 를 흔들고 싶을 때(증강)가 문제인데, 실측 H 에는 pitch 정보가
+    이미 녹아 있어서 그냥 갈아끼울 수가 없다. 그래서 가정 카메라의 pitch 차이만큼만 보정해 곱한다:
+    H_g2i = H_file @ inv(H_assumed(설정 pitch)) @ H_assumed(요청 pitch).
     """
     if cfg.camera.h_i2g_file:
         H_i2g_file = _load_h_i2g_file(cfg.camera.h_i2g_file)

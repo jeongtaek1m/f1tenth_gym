@@ -1,4 +1,7 @@
-"""작은 CNN과, 폐루프/ROS2 노드가 공유하는 predict(image) -> (K,2) m 래퍼."""
+"""작은 CNN 과 predict 래퍼.
+
+시뮬 폐루프와 실차 ROS 노드가 똑같이 Predictor.predict(bev) 를 부른다. 그게 이 설계의 목표다.
+"""
 import numpy as np
 import torch
 import torch.nn as nn
@@ -15,6 +18,12 @@ def _block(cin, cout):
 
 
 class WaypointNet(nn.Module):
+    """stride 2 블록 5개로 줄이고 head 에서 waypoint 좌표를 뽑는다.
+
+    AdaptiveAvgPool 을 써서 BEV 해상도를 바꿔도 head 크기는 그대로다. 편하지만 부작용이 있는데,
+    학습 때와 다른 해상도를 넣어도 에러 없이 돌아가고 출력만 엉망이 된다. config 를 맞춰야 하는 이유.
+    """
+
     def __init__(self, n_out: int = 12):
         super().__init__()
         self.features = nn.Sequential(_block(3, 16), _block(16, 32), _block(32, 64),
@@ -34,18 +43,20 @@ class Predictor:
 
     @torch.no_grad()
     def predict(self, bev_bgr: np.ndarray) -> np.ndarray:
-        """BEV 이미지(config bev 규격) -> waypoints (K,2) m. 시뮬 폐루프와 실차 노드가 공유하는 인터페이스."""
+        """BEV -> waypoints (K,2) m. 시뮬과 실차가 공유하는 유일한 인터페이스."""
         x = to_tensor(bev_bgr)[None].to(self.device)
         y = self.net(x)[0].cpu().numpy() * self.cfg.waypoints.norm_m
         return y.reshape(self.k, 2)
 
     def predict_camera(self, cam_bgr: np.ndarray, H_i2g: np.ndarray) -> np.ndarray:
-        """실차 경로: 카메라 영상 -> IPM(BEV) -> predict. 시뮬에서는 쓰지 않는다."""
+        """실차용. 카메라 영상을 IPM 으로 펴서 predict 에 넘긴다."""
         return self.predict(ipm_bev(cam_bgr, H_i2g, self.cfg))
 
 
 class OraclePredictor:
-    """GT waypoints (+ optional gaussian noise). Lets the closed loop run before any model exists."""
+    """모델 대신 정답을 그대로 돌려준다. 학습된 모델이 없어도 폐루프를 돌려볼 수 있고,
+    noise_sigma 를 올려서 "인지 오차가 이만큼이면 주행이 어디서 깨지나"를 볼 수도 있다."""
+
     def __init__(self, track: Track, cfg: Config, noise_sigma: float = 0.0, rng=None):
         self.track, self.cfg, self.sigma = track, cfg, noise_sigma
         self.rng = rng or np.random.default_rng(0)

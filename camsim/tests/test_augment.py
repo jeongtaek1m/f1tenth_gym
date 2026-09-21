@@ -135,35 +135,3 @@ def test_erase_patches_uses_floor_color(cfg, bev):
     out = augment.erase_patches(bev, cfg, np.random.default_rng(5), n_max=3)
     erased = np.all(out == cfg.lane.color_floor, axis=-1)
     assert erased.sum() >= 100
-
-
-def test_dropout_quads_removes_contiguous_run(cfg):
-    q = np.zeros((1000, 4, 2))
-    q[:, :, 0] = np.arange(1000)[:, None]
-    cfg.augment.tape_dropout_prob = 1.0
-    out = augment.dropout_quads(q, cfg, np.random.default_rng(3))
-    removed = 1000 - len(out)
-    assert 5 <= removed <= 20
-    ids = out[:, 0, 0].astype(int)
-    assert len(np.where(np.diff(ids) > 1)[0]) == 1
-
-
-def test_dropout_quads_noop_when_prob_zero(cfg):
-    q = np.zeros((10, 4, 2))
-    assert len(augment.dropout_quads(q, cfg, rng())) == 10
-
-
-def test_jitter_pitch_changes_horizon(cfg):
-    from camsim import camera
-    cfg.augment.pitch_jitter_deg = 2.0
-    vs = {round(camera.project(augment.jitter_pitch(cfg, rng()), np.array([[1000.0, 0.0]]))[0, 1], 1)}
-    r = np.random.default_rng(0)
-    vs |= {round(camera.project(augment.jitter_pitch(cfg, r), np.array([[1000.0, 0.0]]))[0, 1], 1)
-           for _ in range(20)}
-    assert len(vs) > 5 and all(abs(v - cfg.camera.image_height / 2) < 15 for v in vs)
-
-
-def test_jitter_pitch_zero_when_disabled(cfg):
-    from camsim import camera
-    cfg.augment.pitch_jitter_deg = 0.0
-    assert np.allclose(augment.jitter_pitch(cfg, rng()), camera.build(cfg)[0])
