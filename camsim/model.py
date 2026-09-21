@@ -2,6 +2,7 @@
 
 시뮬 폐루프와 실차 ROS 노드가 똑같이 Predictor.predict(bev) 를 부른다. 그게 이 설계의 목표다.
 """
+from dataclasses import asdict
 import numpy as np
 import torch
 import torch.nn as nn
@@ -72,8 +73,17 @@ class OraclePredictor:
         return wp
 
 
-def save(net: nn.Module, path) -> None:
-    torch.save({"state_dict": net.state_dict(), "n_out": net.head[-1].out_features}, path)
+def _input_spec(cfg: Config) -> dict:
+    """Training settings needed to interpret a BEV and its waypoint outputs."""
+    return {"bev": asdict(cfg.bev), "waypoints": asdict(cfg.waypoints),
+            "lane_colors": {"floor": cfg.lane.color_floor, "tape": cfg.lane.color_tape}}
+
+
+def save(net: nn.Module, path, cfg: Config = None) -> None:
+    checkpoint = {"state_dict": net.state_dict(), "n_out": net.head[-1].out_features}
+    if cfg is not None:
+        checkpoint["input_spec"] = _input_spec(cfg)
+    torch.save(checkpoint, path)
 
 
 def load(path, cfg: Config) -> WaypointNet:
@@ -83,6 +93,8 @@ def load(path, cfg: Config) -> WaypointNet:
         raise ValueError(
             f"checkpoint n_out={ck['n_out']} does not match cfg 2*len(waypoints.ahead_m)={expected}"
         )
+    if "input_spec" in ck and ck["input_spec"] != _input_spec(cfg):
+        raise ValueError("checkpoint input_spec does not match BEV, waypoint or lane color config")
     net = WaypointNet(n_out=ck["n_out"])
     net.load_state_dict(ck["state_dict"])
     return net

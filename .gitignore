@@ -18,3 +18,6 @@ flycheck_*
 /model.pt
 .venv-lab/
 notebooks/f1tenth_gym/
+
+# 발표자료 (바이너리. 레포에 넣으면 clone 할 때마다 받아야 한다)
+*.pptx

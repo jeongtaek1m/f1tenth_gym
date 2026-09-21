@@ -83,6 +83,18 @@ def test_load_rejects_n_out_mismatch(ctx, tmp_path):
         model.load(tmp_path / "bad.pt", cfg)
 
 
+def test_load_rejects_changed_bev_spec(ctx, tmp_path):
+    from copy import deepcopy
+    cfg, _ = ctx
+    net = model.WaypointNet(n_out=2 * len(cfg.waypoints.ahead_m))
+    path = tmp_path / "with_spec.pt"
+    model.save(net, path, cfg)
+    changed = deepcopy(cfg)
+    changed.bev.resolution_m *= 2
+    with pytest.raises(ValueError, match="input_spec"):
+        model.load(path, changed)
+
+
 def test_predict_camera_matches_predict_on_ipm(ctx):
     """실차 경로(카메라 -> IPM -> predict)는 같은 BEV를 직접 넣은 것과 같아야 한다."""
     from camsim import camera, render

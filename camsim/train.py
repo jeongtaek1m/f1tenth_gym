@@ -92,7 +92,7 @@ def train(track: Track, cfg: Config, steps: int, batch_size: int = 32, lr: float
             break
     net.eval()
     if out_path is not None:
-        M.save(net, out_path)
+        M.save(net, out_path, cfg)
     return net, history
 
 

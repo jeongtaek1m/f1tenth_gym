@@ -4,12 +4,16 @@
 하나만 있으면 "이 위치에서 카메라로 보면 이렇게 보인다"를 계산해서 가짜 영상을 그릴 수 있다.
 이 패키지가 그 렌더러와 학습, gym 폐루프 검증을 담는다.
 
-## 실행: 노트북 하나
+## 실행: 코랩에서 노트북 하나
 
-학생용 경로는 `notebooks/camsim_lab.ipynb` 하나고, 코랩에서 돌리는 걸 기준으로 만들었다.
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/minjai345/f1tenth_gym/blob/main/notebooks/camsim_lab.ipynb)
+
+학생용 경로는 `notebooks/camsim_lab.ipynb` 하나다. 위 배지를 누르면 코랩에서 열리고,
+첫 셀이 레포를 clone 하고 의존성을 설치한다. **로컬에 설치할 게 없고 브라우저만 있으면 된다.**
+데이터 생성, 학습, 폐루프 주행, 영상 재생까지 전부 코랩 안에서 돈다.
 
 0장 설치·파라미터 → 1장 카메라와 트랙 → 2장 GT 와 데이터셋 → 3장 학습(train/val loss 실시간)
-→ 4장 폐루프(스윕 표, 횡오차 곡선, 주행 영상) → 5장 결과 보관.
+→ 4장 폐루프(스윕 표, 횡오차 곡선, 주행 영상) → 5장 Drive 체크포인트 보관.
 
 각 장 첫 셀의 파라미터를 바꾸고 그 장을 다시 실행하면서 뭐가 달라지는지 본다.
 `config.yaml` 은 기본값이고, 노트북 파라미터 셀이 그 위에 덮어쓴다.
@@ -19,10 +23,17 @@
 
     python camsim/scripts/build_notebook.py
 
-## 학생이 손대는 파일
+## 학생이 손대는 곳
 
-`camsim/config.yaml` 하나. 카메라 높이·각도·화각, 테이프 폭, waypoint 거리, 지연, 속도가 전부 거기 있다.
-캘리브레이션이 끝나면 `camera.h_i2g_file` 에 `.npy` 경로를 적는다. 그러면 카메라 가정값은 무시된다.
+**노트북 0장의 "파라미터" 셀 하나다.** 카메라 높이·각도·화각, 테이프 폭, waypoint 거리, 지연, 속도가
+전부 거기 모여 있다. 그리고 3장의 `my_augment` 함수.
+
+`camsim/config.yaml` 은 기본값 파일이고 **코랩에서는 직접 고치지 않는다.** 파라미터 셀이 그 위에
+덮어쓰기 때문에 고쳐도 효과가 없고, 레포 파일을 건드리면 다음 실행 때 `git pull` 이 충돌한다.
+(실수로 고쳤으면 `!git checkout -- .` 로 되돌리면 된다.)
+
+캘리브레이션이 끝나면 파라미터 셀에 `cfg.camera.h_i2g_file = "..."` 로 `.npy` 경로를 적는다.
+그러면 카메라 가정값은 전부 무시된다.
 
 ## 모델 입력은 BEV
 
@@ -92,10 +103,32 @@ gym 벽 충돌(`collision`)은 이 맵에서 벽이 멀어서 거의 안 난다.
 world = gym 맵 (m). vehicle = 후륜축 원점, x 전방, y 좌측. image = OpenCV (u 우, v 아래).
 `H_g2i` 는 ground (x,y,1) -> image. pitch 가 0이면 지평선이 이미지 세로 중앙에 온다.
 
+## Colab → Google Drive → Jetson 전달
+
+1. 로컬 변경을 검토한 뒤 `git push origin main` 으로 올린다. 위 Colab 배지로 노트북을 열고
+   GPU 런타임에서 0~5장을 순서대로 실행한다. 학습 결과는 레포 루트의 `model.pt` 다.
+2. 5장 보관 셀은 `model.pt` 를 `MyDrive/camsim_results/` 로 복사하고 SHA-256 을 대조한다.
+   같은 폴더에 실행 설정과 Git 커밋을 담은 `checkpoint.json` 도 쓴다. 데이터셋까지 보관하려면
+   셀의 `SAVE_DATASET = True` 로 바꾼다.
+3. Google Drive 웹에서 **`model.pt` 파일**을 선택해 공유 권한을 "링크가 있는 모든 사용자: 뷰어"로
+   설정하고 링크를 복사한다. 폴더 링크나 `checkpoint.json` 링크를 넣으면 다른 파일을 받게 된다.
+4. Jetson 터미널에서 다음을 실행한다. `DRIVE_FILE_LINK` 는 3단계 링크로, `SHA256_FROM_COLAB`
+   은 5장 셀이 출력한 64자리 값으로 바꾼다. 이 단계는 파일 전달·무결성 확인까지만 한다.
+
+   ```bash
+   python3 -m venv "$HOME/camsim-transfer-venv"
+   "$HOME/camsim-transfer-venv/bin/python" -m pip install gdown
+   "$HOME/camsim-transfer-venv/bin/python" -m gdown 'DRIVE_FILE_LINK' -O "$HOME/model.pt"
+   printf '%s  %s\n' 'SHA256_FROM_COLAB' "$HOME/model.pt" | sha256sum -c -
+   ```
+
+   `python3 -m venv` 가 없으면 Jetson 에 `python3-venv` 패키지가 필요하다. 공유 권한이 없으면
+   `gdown` 은 파일을 받을 수 없다. Jetson 추론 실행과 PyTorch 설치는 이 전달 절차에 포함되지 않는다.
+
 ## 코랩 주의
 
-- 코랩 Python(3.13)에는 numpy 1.22 wheel 이 없다. 그래서 numpy 는 코랩 기본(2.x) 그대로 두고
-  f110_gym 을 `pip install --no-deps -e .` 로 설치한다. 노트북 첫 셀이 이 순서대로 되어 있다.
+- f110_gym 의 오래된 `setup.py` 는 NumPy 상한을 요구하므로, 노트북은 Colab 기본 NumPy/PyTorch 를
+  유지하고 f110_gym 을 `pip install --no-deps -e .` 로 설치한다.
 - 설치 중에 numpy 가 바뀌면 런타임을 한 번 재시작해야 한다. 안 하면 `numpy.dtype size changed` 가 난다.
 - 주행 영상이 셀에 안 뜨면 코덱 문제다. OpenCV 의 mp4v 는 브라우저가 못 읽으므로 `viz.to_h264()` 로
   변환해서 띄운다 (노트북은 이미 그렇게 한다).
@@ -103,17 +136,17 @@ world = gym 맵 (m). vehicle = 후륜축 원점, x 전방, y 좌측. image = Ope
   `from pyglet import gl` 을 해서, 창을 안 띄워도 GL 라이브러리가 있어야 한다.
 - 노트북 첫 코드 셀의 `REPO_URL` 기본값은 조교 fork 다. 다른 fork 를 쓰면 그 줄만 바꾸면 된다.
   clone 이 실패하면 `%cd f1tenth_gym` 부터 전부 깨지므로 주소를 먼저 확인할 것.
-- 세션이 끊기면 다 날아간다. 데이터 zip 과 `model.pt` 는 5장에서 드라이브로 옮겨 둘 것.
+- 세션이 끊기면 로컬 VM 파일이 사라진다. `model.pt` 는 5장에서 Drive 로 옮긴다.
 
 ## 로컬에서 테스트만 돌리려면
 
 gym 없이도 도는 테스트가 대부분이라, 렌더러나 트랙 쪽을 고쳤을 때는 로컬에서 바로 확인할 수 있다.
 
-    pip install opencv-python-headless pyyaml pillow pytest
+    pip install opencv-python-headless pyyaml pillow pytest imageio-ffmpeg
     python -m pytest camsim/tests -q --ignore=camsim/tests/test_closed_loop.py \
         --ignore=camsim/tests/test_dataset_model.py --ignore=camsim/tests/test_disk_dataset.py \
         --ignore=camsim/tests/test_train.py
 
-전부 돌리려면 torch 와 f110_gym 이 필요하다. f110_gym 은 Python 3.9 + numpy 1.22 를 요구하고,
-gym 0.19 는 setup.py 에 오타가 있어서 `camsim/scripts/install_gym019.sh` 로 따로 설치해야 한다.
+전부 돌리려면 torch 와 f110_gym 이 필요하다. f110_gym 의 오래된 의존성 선언은 최신 Colab 과
+맞지 않고, gym 0.19 는 setup.py 에 오타가 있어서 `camsim/scripts/install_gym019.sh` 로 따로 설치해야 한다.
 그냥 코랩에서 돌리는 게 빠르다.

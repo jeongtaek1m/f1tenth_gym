@@ -1,22 +1,23 @@
-# 코랩용. gym 0.19.0 은 setup.py 에 오타가 있어서 camsim/scripts/install_gym019.sh 로 따로 설치한다.
-#
-# 설치 순서
-#   pip install -r camsim/requirements.txt
-#   bash camsim/scripts/install_gym019.sh
-#   pip install --no-deps -e .
-#
-# f110_gym 의 setup.py 는 numpy<=1.22 를 요구하지만 코랩 Python(3.13)에는 그 wheel 이 없다.
-# numpy 2.x 로도 잘 도는 걸 확인했으므로 numpy 는 건드리지 않고 --no-deps 로 설치한다.
-# 여기서 numpy 를 바꾸면 런타임 재시작이 필요해지고, 안 하면 'numpy.dtype size changed' 가 난다.
+# Colab notebook dependencies. gym==0.19.0 and f110_gym are installed separately
+# by the notebook because the upstream package metadata is incompatible with
+# current Colab images. Keep Colab's preinstalled NumPy and PyTorch builds.
+# Jetson only downloads model.pt; it does not need this file.
+
+# Camera, map and dataset
 opencv-python-headless
 pyyaml
-pytest
 scipy
 numba
 pillow
+
+# F1TENTH Gym runtime
+cloudpickle
 pyglet<1.5
 pyopengl
-torch
-imageio-ffmpeg     # mp4v -> H.264 변환. 이거 없으면 주행 영상이 셀에서 안 재생된다
-matplotlib         # 코랩엔 기본 설치. 로컬 노트북 환경용
+setuptools
+wheel
+
+# Notebook display and reports
+imageio-ffmpeg
+matplotlib
 pandas

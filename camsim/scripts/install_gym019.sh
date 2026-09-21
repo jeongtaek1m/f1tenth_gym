@@ -5,9 +5,8 @@
 set -euo pipefail
 PY="${1:-python}"
 TMP="$(mktemp -d)"
-curl -sL https://files.pythonhosted.org/packages/source/g/gym/gym-0.19.0.tar.gz -o "$TMP/gym.tgz"
+trap 'rm -rf "$TMP"' EXIT
+curl -fsSL https://files.pythonhosted.org/packages/source/g/gym/gym-0.19.0.tar.gz -o "$TMP/gym.tgz"
 tar xzf "$TMP/gym.tgz" -C "$TMP"
 sed -i 's/opencv-python>=3\./opencv-python>=3/' "$TMP/gym-0.19.0/setup.py"
-"$PY" -m pip install --no-build-isolation "$TMP/gym-0.19.0" 2>/dev/null \
-  || uv pip install --python "$PY" --no-build-isolation "$TMP/gym-0.19.0"
-rm -rf "$TMP"
+"$PY" -m pip install --no-deps --no-build-isolation "$TMP/gym-0.19.0"
