@@ -57,7 +57,7 @@ md("## 0. 설치와 설정",
    "",
    "설정을 바꿀 때는 **아래 파라미터 셀**을 고친다. `camsim/config.yaml` 을 직접 고치면 파라미터 셀이",
    "덮어써서 효과가 없고, 다음 실행 때 `git pull` 이 충돌한다. 실수로 고쳤으면 `!git checkout -- .` 로 되돌린다.")
-code('REPO_URL = "https://github.com/minjai345/f1tenth_gym.git"   # 조교 fork. 본인 fork 를 쓰면 여기만 바꾸세요',
+code('REPO_URL = "https://github.com/jeongtaek1m/f1tenth_gym.git"   # 다른 fork 를 쓰려면 여기만 바꾸세요',
      'BRANCH = "main"',
      'import os, subprocess, sys, importlib.util',
      '',

@@ -6,7 +6,7 @@
 
 ## 실행: 코랩에서 노트북 하나
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/minjai345/f1tenth_gym/blob/main/notebooks/camsim_lab.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jeongtaek1m/f1tenth_gym/blob/main/notebooks/camsim_lab.ipynb)
 
 학생용 경로는 `notebooks/camsim_lab.ipynb` 하나다. 위 배지를 누르면 코랩에서 열리고,
 첫 셀이 레포를 clone 하고 의존성을 설치한다. **로컬에 설치할 게 없고 브라우저만 있으면 된다.**

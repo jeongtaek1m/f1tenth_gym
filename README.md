@@ -12,7 +12,7 @@ You can find the [documentation](https://f1tenth-gym.readthedocs.io/en/latest/) 
 
 이 fork 에는 합성 카메라 waypoint 파이프라인 `camsim/` 이 들어 있다. 설치 없이 브라우저에서 바로 돌아간다.
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/minjai345/f1tenth_gym/blob/main/notebooks/camsim_lab.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jeongtaek1m/f1tenth_gym/blob/main/notebooks/camsim_lab.ipynb)
 
 위 배지를 누르면 코랩에서 실습 노트북이 열린다. 첫 셀이 레포를 clone 하고 의존성을 설치하므로
 로컬에 아무것도 깔 필요가 없다. 자세한 내용은 [camsim/README.md](camsim/README.md) 참고.
