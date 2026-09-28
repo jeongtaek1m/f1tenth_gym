@@ -67,7 +67,8 @@ cd f1tenth_gym
 git pull -q --ff-only
 pip install -q -r camsim/requirements.txt
 apt-get install -y -q libgl1 > /dev/null                                     # f110_gym 이 pyglet 통해 GL 찾음
-python -c "import gym" 2>/dev/null || bash camsim/scripts/install_gym019.sh  # gym 0.19 는 setup.py 오타 때문에 따로 깖
+python -c "import gym, sys; sys.exit(gym.__version__ != '0.19.0')" 2>/dev/null \
+  || bash camsim/scripts/install_gym019.sh    # 코랩엔 gym 0.25 가 미리 깔려 있음. f110_gym 은 0.19 API 라 갈아끼움
 pip install -q --no-deps -e .                                                # numpy 는 코랩 기본값 그대로 두려고 --no-deps
 ''')
 

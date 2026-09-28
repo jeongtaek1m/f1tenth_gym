@@ -25,6 +25,9 @@ MODES = [
 ]
 
 
+NEED_VERSION = {"gym": "0.19.0"}             # f110_gym 이 옛 API 라 이 버전이어야 함
+
+
 def version(name):
     if importlib.util.find_spec(name) is None:
         return None
@@ -32,7 +35,10 @@ def version(name):
         mod = __import__(name)
     except Exception as e:                       # 설치는 됐는데 import 가 깨지는 경우 (libGL 등)
         return f"!{type(e).__name__}"
-    return getattr(mod, "__version__", "?")
+    v = getattr(mod, "__version__", "?")
+    if name in NEED_VERSION and v != NEED_VERSION[name]:
+        return f"!{v} (need {NEED_VERSION[name]})"
+    return v
 
 
 def platform_name():
@@ -55,7 +61,7 @@ def main():
         for mod, pkg in items:
             v = version(mod)
             have[mod] = v is not None and not str(v).startswith("!")
-            mark = "OK" if have[mod] else ("import 실패" if v else "없음")
+            mark = "OK" if have[mod] else ("버전 불일치" if v and "need" in str(v) else "import 실패" if v else "없음")
             print(f"  {group:6s} {mod:16s} {str(v or '-'):12s} {mark}")
     print()
     print("가능한 것")
