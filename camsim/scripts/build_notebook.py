@@ -93,6 +93,7 @@ import os, sys, json, time, subprocess, numpy as np, cv2, torch, pandas as pd
 import matplotlib.pyplot as plt
 from IPython.display import Image, Video, display, clear_output
 os.chdir("/content/f1tenth_gym")
+sys.path.insert(0, "/content/f1tenth_gym/gym")   # f110_gym. pip -e 의 .pth 는 런타임 재시작 전엔 안 읽힘
 from camsim import config, camera, track, render, gt, augment, dataset, model, train, closed_loop, viz, handoff
 
 plt.rcParams["axes.unicode_minus"] = False       # 코랩 기본 폰트에 한글 없음. 그래프 글자는 영어로
