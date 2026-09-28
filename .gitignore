@@ -4,20 +4,11 @@ __pycache__
 *.pyc
 .DS_Store
 .vscode/
-gym/f110_gym/unittest/maps/
-gym/f110_gym/unittest/centerline/
-docs/_build/
-*.mypy_cache/
-flycheck_*
-.venv/
-.superpowers/
+.venv*/
 
-# camsim run outputs
+# camsim 실행 산출물
 /out/
-/track.npz
 /model.pt
-.venv-lab/
-notebooks/f1tenth_gym/
 
 # 발표자료 (바이너리. 레포에 넣으면 clone 할 때마다 받아야 한다)
 *.pptx

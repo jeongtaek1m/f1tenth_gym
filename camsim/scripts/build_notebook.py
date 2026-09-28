@@ -48,6 +48,9 @@ md("# camsim 실습 노트북 — 카메라 기반 waypoint 모델",
    "| 5 | 결과 보관 | |")
 
 md("## 0. 설치와 설정",
+   "실행 전에 메뉴에서 두 가지. **런타임 > 런타임 유형 변경 > T4 GPU** (안 하면 학습이 10배 넘게 느리다),",
+   "**파일 > 드라이브에 사본 저장** (안 하면 수정한 게 안 남는다).",
+   "",
    "첫 셀은 레포 루트를 찾아 그리로 이동한다. 데이터와 모델은 항상 레포 루트에 저장된다.",
    "코랩에서 레포가 없으면 clone 하고 의존성을 설치한다. 이미 있으면 `git pull --ff-only` 로 갱신한다.",
    "",
@@ -86,6 +89,7 @@ code('REPO_URL = "https://github.com/jeongtaek1m/f1tenth_gym.git"   # 다른 for
      '    os.chdir("f1tenth_gym")',
      'if os.getcwd().startswith("/content"):',
      '    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", "camsim/requirements.txt"], check=True)',
+     '    subprocess.run(["apt-get", "install", "-y", "-q", "libgl1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)   # f110_gym 이 pyglet 을 import 하면서 GL 을 찾는다',
      '    if importlib.util.find_spec("torch") is None:',
      '        raise RuntimeError("Colab 런타임에 PyTorch가 없습니다. 런타임 유형과 설치 상태를 확인하세요.")',
      '    if importlib.util.find_spec("gym") is None:',
@@ -95,6 +99,14 @@ code('REPO_URL = "https://github.com/jeongtaek1m/f1tenth_gym.git"   # 다른 for
      'subprocess.run(["git", "log", "-1", "--format=code version: %h %cd", "--date=short"], check=True)',
      'import camsim.dataset, inspect',
      'print("커널이 로드한 코드:", "최신 (augment_fn 있음)" if "augment_fn" in inspect.signature(camsim.dataset.DiskDataset.__init__).parameters else "예전 모듈 — 런타임 재시작 필요!")')
+
+md("### 환경 확인",
+   "뭐가 깔렸고 어떤 모드가 되는지 본다. 전부 O 여야 한다. X 가 있으면 위 설치 셀 출력에서 에러를 찾는다.")
+code('!{sys.executable} camsim/scripts/check_env.py')
+
+md("### 테스트 (선택)",
+   "코드가 이 런타임에서 제대로 도는지 확인한다. 2~3분 걸린다. 처음 한 번, 그리고 코드를 pull 받은 뒤에 돌리면 된다.")
+code('!{sys.executable} -m pytest camsim/tests -q')
 
 code('try:      # 켜 두면 첫 셀에서 pull 받은 코드가 커널 재시작 없이 반영된다',
      '    get_ipython().run_line_magic("load_ext", "autoreload"); get_ipython().run_line_magic("autoreload", "2")',
@@ -115,7 +127,9 @@ code('try:      # 켜 두면 첫 셀에서 pull 받은 코드가 커널 재시�
      'os.makedirs("out", exist_ok=True)',
      'SMOKE = os.environ.get("CAMSIM_SMOKE") == "1"      # 자동 검증용. 데이터와 학습을 확 줄인다',
      'DEVICE = "cuda" if torch.cuda.is_available() else "cpu"',
-     'print("device:", DEVICE, "| torch", torch.__version__, "| numpy", np.__version__)')
+     'print("device:", DEVICE, "| torch", torch.__version__, "| numpy", np.__version__)',
+     'if DEVICE == "cpu":',
+     '    print("경고: GPU 가 없다. 런타임 > 런타임 유형 변경 > T4 GPU 로 바꾸고 처음부터 다시 실행할 것. CPU 로는 학습이 매우 느리다.")')
 
 md("### 파라미터",
    "`camsim/config.yaml` 이 기본값이고 이 셀이 그 위에 덮어쓴다. **값을 바꿨으면 항상 이 셀을 먼저 다시 실행한다.**",
