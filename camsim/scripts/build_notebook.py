@@ -136,7 +136,7 @@ cfg.waypoints.line = "center"     # 정답 경로 기준. "center" = 좌우 테�
 cfg.waypoints.ahead_m = 1.0       # 예측할 waypoint 의 전방 거리 (m). 이 점이 곧 pure pursuit 목표점. 2 m 넘기지 말 것
 cfg.sampling.lateral_frac = 0.35  # 기준선에서 ±트랙폭*frac 범위에 pose 뿌림
 cfg.sampling.heading_deg  = 15.0  # 헤딩도 ± 이만큼
-N_DATASET = 20000                 # 저장할 장 수
+N_DATASET = 1000                  # 저장할 장 수
 DATA_DIR = "out/dataset"
 
 # ---- 3장: 학습 ----
