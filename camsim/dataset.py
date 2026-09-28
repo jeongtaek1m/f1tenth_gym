@@ -83,15 +83,19 @@ def dataset_spec(cfg: Config) -> dict:
                       "map_yaml": cfg.closed_loop.map_yaml}}
 
 
-def needs_regeneration(out_dir: str, cfg: Config, n: int) -> bool:
-    """labels.csv 없거나, 저장 당시 설정·장 수가 지금과 다르면 True."""
+def needs_regeneration(out_dir: str, cfg: Config, n: int = None) -> bool:
+    """labels.csv 없거나, 저장 당시 설정(과 n 을 주면 장 수)이 지금과 다르면 True."""
     if not os.path.isfile(os.path.join(out_dir, LABELS_CSV)):
         return True
     spec_path = os.path.join(out_dir, SPEC_JSON)
     if not os.path.isfile(spec_path):
         return True                                       # 옛 포맷. 뭘로 만든 건지 모름
     with open(spec_path, encoding="utf-8") as f:
-        return json.load(f) != {"n": int(n), **dataset_spec(cfg)}
+        saved = json.load(f)
+    if n is None:                                         # 옛 노트북은 n 을 안 넘김. 설정만 비교
+        saved.pop("n", None)
+        return saved != dataset_spec(cfg)
+    return saved != {"n": int(n), **dataset_spec(cfg)}
 
 
 def generate_dataset(track: Track, cfg: Config, n: int, out_dir: str, seed: int = 0,

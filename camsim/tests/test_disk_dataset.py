@@ -56,6 +56,7 @@ def test_changed_config_is_detected(ctx):
     cfg, trk, root = ctx
     assert not dataset.needs_regeneration(root, cfg, 30)
     assert dataset.needs_regeneration(root, cfg, 31)              # 장 수 바뀌어도 다시 만듦
+    assert not dataset.needs_regeneration(root, cfg)              # n 안 주면 설정만 봄 (옛 노트북 호환)
     cfg2 = copy.deepcopy(cfg); cfg2.waypoints.ahead_m += 0.5
     assert dataset.needs_regeneration(root, cfg2, 30)
     with pytest.raises(ValueError, match="different config"):
