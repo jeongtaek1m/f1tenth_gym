@@ -51,22 +51,21 @@ BEV 범위와 해상도는 `config.yaml` 의 `bev:` 섹션 하나로 정한다.
 
 ## waypoint 는 1개, 거리는 config 로
 
-모델은 전방 `waypoints.ahead_m` 지점 하나의 (x, y) 를 낸다. 기본 `[1.0]` 이고 단위는 미터,
+모델은 전방 `waypoints.ahead_m` 지점 하나의 (x, y) 를 낸다. 기본 `1.0` 이고 단위는 미터,
 기준선을 따라간 호길이다. 그 점이 곧 pure pursuit 의 목표점이라 lookahead 설정이 따로 없다.
 
-거리를 바꾸면 라벨이 바뀌므로 데이터를 다시 만들고(`REGENERATE = True`) 다시 학습해야 한다.
-옛 `model.pt` 는 `input_spec` 검사에서 거부되니 조용히 섞일 일은 없다.
+거리를 바꾸면 라벨이 바뀐다. 노트북 2장이 `spec.json` 을 보고 데이터를 다시 만들고, 옛 `model.pt` 는
+`input_spec` 검사에서 거부되니 조용히 섞일 일은 없다.
 
 1 m 인 이유: 카메라 높이 0.2 m, 정면 장착 기준으로 PV → IPM → BEV 복구 오차를 재 보면 1.5 m 까지는
 테이프 위치가 0.3 cm 안이고, 2 m 를 넘으면 코너에서 8~10 cm, 3 m 는 직선에서도 6 cm(최대 16 cm)다.
 2 m 안쪽에서 고를 것. 더 멀리 보려면 카메라를 올려야 한다 (0.35 m + 15° 숙이면 3 m 에서 0.4 cm).
 
-리스트라 여러 점을 넣을 수도 있다. 그러면 마지막 점으로 조향한다.
-
 ## 데이터셋
 
 `dataset.generate_dataset` 이 `out/dataset/images/NNNNNN.png` (BEV) 와 `labels.csv`
-(file, x, y, theta, wp0_x, wp0_y) 를 만든다. 저장되는 건 증강 없는 원본이고, train/val 은 9:1 로
+(file, x, y, theta, wp_x, wp_y) 를 만든다. 같이 저장되는 `spec.json` 이 어떤 설정으로 만든
+데이터인지 기록해서, 설정이 바뀌면 노트북 2장이 알아서 다시 만든다. 저장되는 건 증강 없는 원본이고, train/val 은 9:1 로
 결정적으로 나뉜다.
 
 증강은 로딩 때 `DiskDataset(..., augment_fn=fn)` 의 `fn(bev, rng) -> bev` 하나로 넣는다 (기본 None).

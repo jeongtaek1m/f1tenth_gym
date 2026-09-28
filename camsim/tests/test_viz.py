@@ -37,12 +37,11 @@ def test_local_view_waypoints_at_expected_pixels(ctx):
     cfg, trk, m = ctx
     i = 10
     pose = np.array([*trk.center[i], trk.heading[i]])
-    wp = gt.waypoints_ahead(pose, trk, cfg)
+    wp = gt.waypoint_ahead(pose, trk, cfg)
     img = viz.local_view(pose, trk, wp, cfg, m, ahead_m=5.0, behind_m=1.5, half_width_m=3.0, res_m=0.01)
     assert img.shape == (650, 600, 3)
-    for p in wp:                                # waypoint marker (green) drawn where the geometry says
-        u, v = int(round((3.0 - p[1]) / 0.01)), int(round((5.0 - p[0]) / 0.01))
-        assert (img[v, u] == viz.COL_WP).all()
+    u, v = int(round((3.0 - wp[1]) / 0.01)), int(round((5.0 - wp[0]) / 0.01))   # 초록 점이 기하가 말하는 자리에
+    assert (img[v, u] == viz.COL_WP).all()
 
 def test_side_by_side_heights_match():
     a = np.zeros((400, 640, 3), np.uint8); b = np.zeros((650, 600, 3), np.uint8)

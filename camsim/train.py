@@ -1,6 +1,7 @@
 """학습 루프와 오프라인 평가.
 
 손실은 Huber(SmoothL1). waypoint 회귀라 가끔 튀는 라벨에 L2 보다 덜 흔들린다.
+타깃이 미터 단위라 오차가 1 m 안이면 L2 처럼 동작한다. L1 구간을 쓰고 싶으면 beta 를 줄인다.
 """
 import time
 import numpy as np
@@ -12,8 +13,13 @@ from .dataset import SynthDataset, DiskDataset, make_sample
 from . import model as M
 
 
+def _summary(errs_m) -> dict:
+    errs = np.asarray(errs_m, float)
+    return {"mean_m": float(errs.mean()), "max_m": float(errs.max()), "n": int(len(errs)), "errs_m": errs}
+
+
 def evaluate(predictor, track: Track, cfg: Config, n: int = 200, seed: int = 123, degrade_fn=None) -> dict:
-    """새로 뽑은 pose n 개에 대한 waypoint 별 오차(m).
+    """새로 뽑은 pose n 개에 대한 waypoint 오차(m). 예측점과 정답점 사이 거리다.
 
     degrade_fn(bev, rng) 을 주면 열화된 입력에 대한 강건성 측정이 된다 (노트북 3장 sim-to-real 표).
     """
@@ -26,11 +32,8 @@ def evaluate(predictor, track: Track, cfg: Config, n: int = 200, seed: int = 123
         bev, wp, pose = make_sample(track, cfg, rng, degrade_fn, mask=mask)
         if hasattr(predictor, "set_pose"):        # OraclePredictor 는 이미지가 아니라 pose 를 본다
             predictor.set_pose(pose)
-        pred = predictor.predict(bev)
-        errs.append(np.hypot(*(pred - wp).T))
-    errs = np.array(errs)
-    per = errs.mean(0)
-    return {"per_waypoint_m": per, "mean_m": float(per.mean()), "max_m": float(errs.max())}
+        errs.append(np.hypot(*(predictor.predict(bev) - wp)))
+    return _summary(errs)
 
 
 def _batches(dataset, batch_size, num_workers, seed):
@@ -66,7 +69,7 @@ def train(track: Track, cfg: Config, steps: int, batch_size: int = 32, lr: float
     callback(history) 는 log_every 마다 불린다. 노트북에서 loss 곡선을 실시간으로 그릴 때 쓴다.
     """
     torch.manual_seed(seed)
-    net = M.WaypointNet(n_out=2 * len(cfg.waypoints.ahead_m)).to(device)
+    net = M.WaypointNet().to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
     loss_fn = torch.nn.SmoothL1Loss()
@@ -97,12 +100,7 @@ def train(track: Track, cfg: Config, steps: int, batch_size: int = 32, lr: float
 
 
 def evaluate_dataset(predictor, ds: DiskDataset, n: int = None) -> dict:
-    """저장된 이미지(보통 val split)로 재는 waypoint 별 오차. 증강 없이 원본을 쓴다."""
+    """저장된 이미지(보통 val split)로 재는 waypoint 오차. 증강 없이 원본을 쓴다."""
     n = len(ds) if n is None else min(n, len(ds))
-    errs = []
-    for i in range(n):
-        pred = predictor.predict(ds.load_image(i))
-        errs.append(np.hypot(*(pred - ds.wps[ds.idx[i]]).T))
-    errs = np.array(errs)
-    per = errs.mean(0)
-    return {"per_waypoint_m": per, "mean_m": float(per.mean()), "max_m": float(errs.max()), "n": int(n)}
+    errs = [np.hypot(*(predictor.predict(ds.load_image(i)) - ds.wps[ds.idx[i]])) for i in range(n)]
+    return _summary(errs)

@@ -6,39 +6,36 @@ def ctx():
     cfg = config.load()
     return cfg, track.from_csv("examples/example_waypoints.csv", cfg)
 
-def test_waypoints_on_straight_are_ahead(ctx):
+def test_waypoint_is_ahead_on_straight(ctx):
     cfg, trk = ctx
     i = 10
     pose = np.array([*trk.center[i], trk.heading[i]])
-    wp = gt.waypoints_ahead(pose, trk, cfg)
-    assert wp.shape == (len(cfg.waypoints.ahead_m), 2)
-    assert np.all(np.diff(wp[:, 0]) > 0)
-    assert np.allclose(wp[:, 0], cfg.waypoints.ahead_m, atol=0.3)
+    wp = gt.waypoint_ahead(pose, trk, cfg)
+    assert wp.shape == (2,)
+    assert abs(wp[0] - cfg.waypoints.ahead_m) < 0.3 and abs(wp[1]) < 0.3
 
-def test_waypoints_arc_length_monotonic_everywhere(ctx):
+def test_waypoint_is_forward_everywhere(ctx):
     cfg, trk = ctx
     for i in range(0, len(trk.center), 37):
         pose = np.array([*trk.center[i], trk.heading[i]])
-        wp = gt.waypoints_ahead(pose, trk, cfg)
-        d = np.hypot(*np.diff(np.vstack([[0, 0], wp]), axis=0).T)
-        assert np.all(d > 0.2)
+        wp = gt.waypoint_ahead(pose, trk, cfg)
+        assert wp[0] > 0 and np.hypot(*wp) > 0.5 * cfg.waypoints.ahead_m
 
 def test_left_turn_has_positive_y(ctx):
     cfg, trk = ctx
-    dh = np.angle(np.exp(1j * (np.roll(trk.heading, -40) - trk.heading)))
-    i = int(np.argmax(dh))              # strongest left turn over next 2 m
+    n = int(round(cfg.waypoints.ahead_m / cfg.lane.segment_len_m))
+    dh = np.angle(np.exp(1j * (np.roll(trk.heading, -n) - trk.heading)))
+    i = int(np.argmax(dh))              # ahead_m 구간에서 가장 센 좌회전
     pose = np.array([*trk.center[i], trk.heading[i]])
-    wp = gt.waypoints_ahead(pose, trk, cfg)
-    assert wp[-1, 1] > 0.05
+    assert gt.waypoint_ahead(pose, trk, cfg)[1] > 0.05
 
 def test_wraps_at_track_end(ctx):
     cfg, trk = ctx
     i = len(trk.center) - 3
     pose = np.array([*trk.center[i], trk.heading[i]])
-    wp = gt.waypoints_ahead(pose, trk, cfg)
-    # The farthest waypoint should stay well forward even across the wrap; allow slack for
-    # resample-grid snapping rather than requiring it match cfg.waypoints.ahead_m[-1] exactly.
-    assert np.all(np.isfinite(wp)) and wp[-1, 0] > cfg.waypoints.ahead_m[-1] * 0.6
+    wp = gt.waypoint_ahead(pose, trk, cfg)
+    # 결승선을 넘어도 앞쪽에 있어야 한다. 리샘플 격자 때문에 정확히 ahead_m 은 아니다.
+    assert np.all(np.isfinite(wp)) and wp[0] > cfg.waypoints.ahead_m * 0.6
 
 def test_sample_pose_within_bounds(ctx):
     cfg, trk = ctx

@@ -1,4 +1,4 @@
-"""학습 데이터. 모델 입력은 BEV 다.
+"""학습 데이터. 모델 입력은 BEV, 라벨은 waypoint 하나의 (x, y) 다.
 
   시뮬 : pose -> render_bev -> 카메라 가시 마스크 -> (증강)
   실차 : 카메라 -> undistort -> IPM
@@ -10,7 +10,9 @@ Dataset 이 둘인데, SynthDataset 은 디스크 없이 매 샘플 새로 그�
 폴더를 읽는다. 노트북은 DiskDataset 쪽을 쓴다 (같은 데이터로 반복 학습해야 비교가 되니까).
 """
 import csv
+import json
 import os
+from dataclasses import asdict
 import cv2
 import numpy as np
 import torch
@@ -26,7 +28,7 @@ def to_tensor(img_bgr: np.ndarray) -> torch.Tensor:
 
 def make_sample(track: Track, cfg: Config, rng: np.random.Generator, augment_fn=None,
                 mask: np.ndarray = None, with_camera: bool = False):
-    """pose 하나를 뽑아 (bev, waypoints (K,2) m, pose) 를 만든다.
+    """pose 하나를 뽑아 (bev, waypoint (x, y) m, pose) 를 만든다.
 
     augment_fn : f(bev, rng) -> bev. 라벨은 증강과 무관한 참값이라, 증강은 "같은 정답을
                  다르게 본 것"이어야 한다 (augment.py 맨 위 참고).
@@ -41,7 +43,7 @@ def make_sample(track: Track, cfg: Config, rng: np.random.Generator, augment_fn=
     bev = render.render_bev(pose, track.quads, cfg, mask)
     if augment_fn is not None:
         bev = augment_fn(bev, rng)
-    wp = gt.waypoints_ahead(pose, track, cfg)
+    wp = gt.waypoint_ahead(pose, track, cfg)
     if with_camera:
         return bev, wp, pose, render.render(pose, track.quads, None, H_g2i, cfg)
     return bev, wp, pose
@@ -62,17 +64,34 @@ class SynthDataset(IterableDataset):
         norm = self.cfg.waypoints.norm_m
         while True:
             img, wp, _ = make_sample(self.track, self.cfg, rng, self.augment_fn, mask=self.mask)
-            yield to_tensor(img), torch.from_numpy(wp.reshape(-1) / norm).float()
+            yield to_tensor(img), torch.from_numpy(wp / norm).float()
 
 
 # ---- 디스크 데이터셋 -----------------------------------------------------------
 
 LABELS_CSV = "labels.csv"
 IMAGES_DIR = "images"
+SPEC_JSON = "spec.json"
+LABEL_HEADER = ["file", "x", "y", "theta", "wp_x", "wp_y"]
 
 
-def _label_header(cfg: Config):
-    return ["file", "x", "y", "theta"] + [f"wp{k}_{a}" for k in range(len(cfg.waypoints.ahead_m)) for a in ("x", "y")]
+def dataset_spec(cfg: Config) -> dict:
+    """생성된 이미지와 라벨에 영향을 주는 설정 전부. 이게 바뀌었으면 데이터를 다시 만들어야 한다."""
+    return {"camera": asdict(cfg.camera), "lane": asdict(cfg.lane), "bev": asdict(cfg.bev),
+            "waypoints": asdict(cfg.waypoints), "sampling": asdict(cfg.sampling),
+            "track": {"centerline_csv": cfg.closed_loop.centerline_csv,
+                      "map_yaml": cfg.closed_loop.map_yaml}}
+
+
+def needs_regeneration(out_dir: str, cfg: Config) -> bool:
+    """labels.csv 가 없거나, 저장 당시 설정이 지금 cfg 와 다르면 True."""
+    if not os.path.isfile(os.path.join(out_dir, LABELS_CSV)):
+        return True
+    spec_path = os.path.join(out_dir, SPEC_JSON)
+    if not os.path.isfile(spec_path):
+        return True                                       # 옛 포맷. 무엇으로 만든 건지 모른다
+    with open(spec_path, encoding="utf-8") as f:
+        return json.load(f) != dataset_spec(cfg)
 
 
 def generate_dataset(track: Track, cfg: Config, n: int, out_dir: str, seed: int = 0,
@@ -80,7 +99,8 @@ def generate_dataset(track: Track, cfg: Config, n: int, out_dir: str, seed: int 
     """BEV n 장을 out_dir/images/*.png 와 labels.csv 로 저장하고 labels.csv 경로를 돌려준다.
 
     저장되는 건 증강 없는 원본이다. 증강은 보통 로딩 때 DiskDataset(augment_fn=...) 로 넣는다.
-    그래야 같은 데이터로 증강만 바꿔 가며 비교할 수 있다.
+    그래야 같은 데이터로 증강만 바꿔 가며 비교할 수 있다. 같이 저장하는 spec.json 으로
+    나중에 설정이 바뀌었는지 알 수 있다.
     """
     from .camera import build
     img_dir = os.path.join(out_dir, IMAGES_DIR)
@@ -90,26 +110,29 @@ def generate_dataset(track: Track, cfg: Config, n: int, out_dir: str, seed: int 
     path = os.path.join(out_dir, LABELS_CSV)
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(_label_header(cfg))
+        w.writerow(LABEL_HEADER)
         for i in range(n):
             img, wp, pose = make_sample(track, cfg, rng, augment_fn, mask=mask)
             name = f"{i:06d}.png"
             cv2.imwrite(os.path.join(img_dir, name), img)
-            w.writerow([name, *np.round(pose, 6), *np.round(wp.reshape(-1), 4)])
+            w.writerow([name, *np.round(pose, 6), *np.round(wp, 4)])
             if log_every and (i + 1) % log_every == 0:
                 print(f"{i + 1}/{n}", flush=True)
+    with open(os.path.join(out_dir, SPEC_JSON), "w", encoding="utf-8") as f:
+        json.dump(dataset_spec(cfg), f, ensure_ascii=False, indent=1)
     return path
 
 
 def read_labels(out_dir: str):
-    """labels.csv -> (파일명 리스트, poses (N,3), waypoints (N,K,2))."""
+    """labels.csv -> (파일명 리스트, poses (N,3), waypoints (N,2))."""
     with open(os.path.join(out_dir, LABELS_CSV), newline="") as f:
         rows = list(csv.reader(f))
-    hdr, rows = rows[0], rows[1:]
+    rows = rows[1:]
     files = [r[0] for r in rows]
     arr = np.array([[float(v) for v in r[1:]] for r in rows], dtype=np.float64).reshape(len(rows), -1)
-    poses, wps = arr[:, :3], arr[:, 3:].reshape(len(rows), -1, 2)
-    return files, poses, wps
+    if arr.shape[1] != 5:
+        raise ValueError(f"labels.csv has {arr.shape[1]} value columns, expected 5 (x, y, theta, wp_x, wp_y)")
+    return files, arr[:, :3], arr[:, 3:5]
 
 
 def split_indices(n: int, split: str, val_frac: float = 0.1, seed: int = 0) -> np.ndarray:
@@ -126,17 +149,20 @@ def split_indices(n: int, split: str, val_frac: float = 0.1, seed: int = 0) -> n
 
 
 class DiskDataset(torch.utils.data.Dataset):
-    """generate_dataset 이 만든 폴더를 읽는다. __getitem__ -> (tensor (3,h,w), target (2K,))."""
+    """generate_dataset 이 만든 폴더를 읽는다. __getitem__ -> (tensor (3,h,w), target (2,))."""
 
     def __init__(self, root: str, cfg: Config, split: str = "train", val_frac: float = 0.1,
                  seed: int = 0, augment_fn=None):
-        """augment_fn: f(bev_bgr, rng) -> bev_bgr. None 이면 저장된 이미지 그대로 쓴다."""
+        """augment_fn: f(bev_bgr, rng) -> bev_bgr, 로딩 때 적용. None 이면 저장된 이미지 그대로 쓴다."""
         self.root, self.cfg, self.augment_fn = root, cfg, augment_fn
+        spec_path = os.path.join(root, SPEC_JSON)
+        if os.path.isfile(spec_path):
+            with open(spec_path, encoding="utf-8") as f:
+                if json.load(f) != dataset_spec(cfg):
+                    raise ValueError(f"{root} was generated with a different config; regenerate it")
         self.files, self.poses, self.wps = read_labels(root)
         self.idx = split_indices(len(self.files), split, val_frac, seed)
         self.seed = seed
-        if self.wps.shape[1] != len(cfg.waypoints.ahead_m):
-            raise ValueError(f"labels have {self.wps.shape[1]} waypoints but config has {len(cfg.waypoints.ahead_m)}")
 
     def __len__(self):
         return len(self.idx)
@@ -155,4 +181,4 @@ class DiskDataset(torch.utils.data.Dataset):
             rng = np.random.default_rng([self.seed, int(self.idx[i]), int(torch.randint(0, 2**31 - 1, (1,)))])
             img = self.augment_fn(img, rng)
         wp = self.wps[self.idx[i]]
-        return to_tensor(img), torch.from_numpy(wp.reshape(-1) / self.cfg.waypoints.norm_m).float()
+        return to_tensor(img), torch.from_numpy(wp / self.cfg.waypoints.norm_m).float()

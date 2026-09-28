@@ -63,7 +63,6 @@ def run(env, predictor, track: Track, cfg: Config, H_g2i: np.ndarray, start_inde
     cl = cfg.closed_loop
     if latency_steps is None:
         latency_steps = cl.latency_steps
-    k = len(cfg.waypoints.ahead_m)
 
     # 제어 한 틱마다 물리를 몇 번 돌릴지. control_hz 가 물리 주파수의 약수가 아니면 반올림되면서
     # 실제 제어 주기가 요청값과 달라지므로, 그 경우 경고하고 실제값(hz_eff)을 결과에 남긴다.
@@ -79,7 +78,7 @@ def run(env, predictor, track: Track, cfg: Config, H_g2i: np.ndarray, start_inde
     p0 = track.center[start_index]
     obs, _, done, _ = env.reset(np.array([[p0[0], p0[1], track.heading[start_index]]]))
     # 지연 버퍼. 처음 latency_steps 틱 동안은 "직진" 예측을 내보낸다.
-    buf = deque([np.column_stack([np.asarray(cfg.waypoints.ahead_m), np.zeros(k)])] * latency_steps)
+    buf = deque([np.array([cfg.waypoints.ahead_m, 0.0])] * latency_steps)
 
     mask = render.bev_visibility_mask(H_g2i, cfg)
     writer = None            # 영상은 [카메라 뷰 | 모델 입력 BEV]. 첫 프레임 크기로 열린다.

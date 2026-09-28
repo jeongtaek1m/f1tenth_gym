@@ -80,7 +80,7 @@ def mark_poses_on_map(map_bgr: np.ndarray, offset_px, mapimg: MapImage, poses, l
 def local_view(pose, track: Track, wp_vehicle, cfg: Config, mapimg: MapImage = None,
                ahead_m: float = 5.0, behind_m: float = 1.5, half_width_m: float = 3.0,
                res_m: float = 0.01) -> np.ndarray:
-    """차 주변 확대 top-down. 위가 차량 전방이고, 벽·테이프·차체·카메라 화각·BEV 범위·GT waypoint 를 얹는다."""
+    """차 주변 확대 top-down. 위가 차량 전방이고, 벽·테이프·차체·카메라 화각·BEV 범위·GT waypoint(점 하나)를 얹는다."""
     h, w = int(round((ahead_m + behind_m) / res_m)), int(round(2 * half_width_m / res_m))
 
     def vp(pts_v):   # vehicle m -> canvas px
@@ -127,10 +127,9 @@ def local_view(pose, track: Track, wp_vehicle, cfg: Config, mapimg: MapImage = N
     a0, a1 = vp([[0, 0], [1.0, 0]])
     cv2.arrowedLine(img, tuple(np.round(a0).astype(int)), tuple(np.round(a1).astype(int)), COL_CAR, 2, cv2.LINE_AA, tipLength=0.25)
 
-    for k, p in enumerate(vp(np.asarray(wp_vehicle))):
-        c = tuple(np.round(p).astype(int))
-        cv2.circle(img, c, 6, COL_WP, -1, cv2.LINE_AA)
-        cv2.putText(img, f"{cfg.waypoints.ahead_m[k]:g}", (c[0] + 8, c[1] + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 90, 0), 1, cv2.LINE_AA)
+    c = tuple(np.round(vp(np.asarray(wp_vehicle, float).reshape(2))).astype(int))
+    cv2.circle(img, c, 6, COL_WP, -1, cv2.LINE_AA)
+    cv2.putText(img, f"{cfg.waypoints.ahead_m:g} m", (c[0] + 8, c[1] + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 90, 0), 1, cv2.LINE_AA)
     return img
 
 

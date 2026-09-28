@@ -55,7 +55,7 @@ class Render:
 @dataclass
 class Waypoints:
     line: str
-    ahead_m: List[float]
+    ahead_m: float
     norm_m: float
 
 

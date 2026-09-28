@@ -12,23 +12,21 @@ def bev_hw(cfg):
 
 def test_make_sample_is_bev_with_camera_mask(ctx):
     """모델 입력은 BEV. 카메라가 못 보는 근거리(0.32 m 안쪽)는 바닥색이어야 한다(실차 IPM 출력과 동일)."""
-    from camsim import camera, render
     cfg, trk = ctx
     bev, wp, pose, cam = dataset.make_sample(trk, cfg, np.random.default_rng(0), with_camera=True)
     h, w = bev_hw(cfg)
     assert bev.shape == (h, w, 3) and cam.shape == (cfg.camera.image_height, cfg.camera.image_width, 3)
+    assert wp.shape == (2,)
     near_rows = int((cfg.bev.x_range_m[1] - 0.30) / cfg.bev.resolution_m)      # x < 0.30 m -> 아래쪽 행들
     assert np.all(bev[near_rows:] == cfg.lane.color_floor)
     assert np.all(bev == cfg.lane.color_tape, axis=-1).sum() > 1000
 
 def test_dataset_yields_tensor_pairs(ctx):
     cfg, trk = ctx
-    n_out = 2 * len(cfg.waypoints.ahead_m)
-    it = iter(dataset.SynthDataset(trk, cfg, seed=0))
-    x, y = next(it)
+    x, y = next(iter(dataset.SynthDataset(trk, cfg, seed=0)))
     assert x.shape == (3, *bev_hw(cfg))
     assert x.dtype == torch.float32 and 0 <= x.min() <= x.max() <= 1
-    assert y.shape == (n_out,)
+    assert y.shape == (2,)
 
 def test_dataset_is_deterministic_per_seed(ctx):
     cfg, trk = ctx
@@ -38,62 +36,50 @@ def test_dataset_is_deterministic_per_seed(ctx):
 
 def test_dataloader_batches(ctx):
     cfg, trk = ctx
-    n_out = 2 * len(cfg.waypoints.ahead_m)
     dl = torch.utils.data.DataLoader(dataset.SynthDataset(trk, cfg), batch_size=4, num_workers=0)
     x, y = next(iter(dl))
-    assert x.shape == (4, 3, *bev_hw(cfg))
-    assert y.shape == (4, n_out)
+    assert x.shape == (4, 3, *bev_hw(cfg)) and y.shape == (4, 2)
 
 def test_model_forward_and_size(ctx):
     cfg, _ = ctx
     net = model.WaypointNet()
-    out = net(torch.zeros(2, 3, *bev_hw(cfg)))
-    assert out.shape == (2, 12)   # WaypointNet()'s own default n_out, not config-driven
+    assert net(torch.zeros(2, 3, *bev_hw(cfg))).shape == (2, 2)
     assert sum(p.numel() for p in net.parameters()) < 1_000_000
 
 def test_predictor_shape(ctx):
     cfg, _ = ctx
-    net = model.WaypointNet(n_out=2 * len(cfg.waypoints.ahead_m))
-    p = model.Predictor(net, cfg)
-    wp = p.predict(np.zeros((*bev_hw(cfg), 3), np.uint8))
-    assert wp.shape == (len(cfg.waypoints.ahead_m), 2)
+    wp = model.Predictor(model.WaypointNet(), cfg).predict(np.zeros((*bev_hw(cfg), 3), np.uint8))
+    assert wp.shape == (2,)
 
 def test_oracle_matches_gt(ctx):
     cfg, trk = ctx
     pose = np.array([*trk.center[20], trk.heading[20]])
     o = model.OraclePredictor(trk, cfg)
     o.set_pose(pose)
-    assert np.allclose(o.predict(None), gt.waypoints_ahead(pose, trk, cfg))
+    assert np.allclose(o.predict(None), gt.waypoint_ahead(pose, trk, cfg))
 
 def test_save_load(ctx, tmp_path):
     cfg, _ = ctx
-    net = model.WaypointNet(n_out=2 * len(cfg.waypoints.ahead_m))
-    model.save(net, tmp_path / "m.pt")
+    net = model.WaypointNet()
+    model.save(net, tmp_path / "m.pt", cfg)
     net2 = model.load(tmp_path / "m.pt", cfg)
     x = torch.zeros(1, 3, *bev_hw(cfg))
     net.eval(); net2.eval()
     assert torch.allclose(net(x), net2(x))
 
-def test_load_rejects_n_out_mismatch(ctx, tmp_path):
-    cfg, _ = ctx
-    bad_n_out = 2 * len(cfg.waypoints.ahead_m) + 2   # deliberately mismatched
-    net = model.WaypointNet(n_out=bad_n_out)
-    model.save(net, tmp_path / "bad.pt")
-    with pytest.raises(ValueError, match="n_out"):
-        model.load(tmp_path / "bad.pt", cfg)
-
-
-def test_load_rejects_changed_bev_spec(ctx, tmp_path):
+@pytest.mark.parametrize("change", ["bev", "waypoint", "color"])
+def test_load_rejects_changed_input_spec(ctx, tmp_path, change):
+    """다른 규격으로 학습한 체크포인트는 조용히 로드되면 안 된다."""
     from copy import deepcopy
     cfg, _ = ctx
-    net = model.WaypointNet(n_out=2 * len(cfg.waypoints.ahead_m))
-    path = tmp_path / "with_spec.pt"
-    model.save(net, path, cfg)
+    path = tmp_path / "m.pt"
+    model.save(model.WaypointNet(), path, cfg)
     changed = deepcopy(cfg)
-    changed.bev.resolution_m *= 2
+    if change == "bev": changed.bev.resolution_m *= 2
+    elif change == "waypoint": changed.waypoints.ahead_m += 0.5
+    else: changed.lane.color_tape = [0, 0, 255]
     with pytest.raises(ValueError, match="input_spec"):
         model.load(path, changed)
-
 
 def test_predict_camera_matches_predict_on_ipm(ctx):
     """실차 경로(카메라 -> IPM -> predict)는 같은 BEV를 직접 넣은 것과 같아야 한다."""

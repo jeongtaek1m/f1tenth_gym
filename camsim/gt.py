@@ -1,6 +1,6 @@
 """정답 waypoint 와 학습용 pose 샘플링.
 
-waypoint 는 직선 거리가 아니라 기준선을 따라간 호길이로 잡는다. 직선 거리로 잡으면 코너에서
+waypoint 는 하나다. 직선 거리가 아니라 기준선을 따라간 호길이로 잡는다. 직선 거리로 잡으면 코너에서
 점들이 안쪽을 파고들어 정답이 이상해진다.
 """
 import numpy as np
@@ -19,11 +19,11 @@ def lateral_error(track: Track, xy) -> float:
     return float(np.hypot(*(track.center[i] - np.asarray(xy)[:2])))
 
 
-def waypoints_ahead(pose, track: Track, cfg: Config) -> np.ndarray:
-    """pose 앞쪽 ahead_m 지점들을 차량 좌표계로. 트랙 끝에서는 한 바퀴 돌아 이어진다."""
+def waypoint_ahead(pose, track: Track, cfg: Config) -> np.ndarray:
+    """pose 에서 기준선을 따라 ahead_m 앞의 점 (x, y), 차량 좌표계. 트랙 끝에서는 한 바퀴 돌아 이어진다."""
     i = nearest_index(track, pose[:2])
-    s_t = (track.s[i] + np.asarray(cfg.waypoints.ahead_m)) % track.length
-    j = np.searchsorted(track.s, s_t) % len(track.s)
+    s_t = (track.s[i] + cfg.waypoints.ahead_m) % track.length
+    j = int(np.searchsorted(track.s, s_t)) % len(track.s)
     return to_vehicle(pose, track.center[j])
 
 

@@ -37,9 +37,8 @@ waypoints:
   line: center              # 정답 경로의 기준
                             #   center 좌우 테이프의 중간선. 실차 자동 라벨링과 같은 기준이다
                             #   racing CSV 에 든 레이싱 라인. 코너 안쪽을 파고들어 더 짧다
-  ahead_m: [1.0]            # 예측할 waypoint 의 전방 호길이 (m). 이 점이 곧 pure pursuit 목표점이다.
+  ahead_m: 1.0              # 예측할 waypoint 의 전방 호길이 (m). 이 점이 곧 pure pursuit 목표점이다.
                             # 카메라 높이 0.2 m 로는 2 m 를 넘기지 말 것 (IPM 복구가 무너진다).
-                            # 여러 개 넣어도 되지만 조향은 마지막 점으로 한다.
   norm_m: 1.0               # 타깃 정규화 나눗수
 
 sampling:
