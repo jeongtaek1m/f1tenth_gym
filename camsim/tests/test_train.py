@@ -48,3 +48,12 @@ def test_evaluate_with_degrade_fn(ctx):
     seen = []
     r = train.evaluate(P(), trk, cfg, n=5, degrade_fn=lambda bev, rng: (seen.append(bev.shape), bev)[1])
     assert len(seen) == 5 and r["mean_m"] < 1e-9
+
+
+def test_dataset_smaller_than_batch_raises(ctx, tmp_path):
+    """9장에 배치 32 면 drop_last 때문에 배치가 0개라 무한루프였음. 이제 바로 에러."""
+    from camsim import dataset
+    cfg, trk = ctx
+    root = str(tmp_path / "tiny"); dataset.generate_dataset(trk, cfg, 9, root, log_every=0)
+    with pytest.raises(ValueError, match="batch_size"):
+        train.train(trk, cfg, steps=5, batch_size=32, dataset=dataset.DiskDataset(root, cfg, "all"))

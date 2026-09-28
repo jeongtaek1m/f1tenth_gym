@@ -68,6 +68,11 @@ def train(track: Track, cfg: Config, steps: int, batch_size: int = 32, lr: float
     val_dataset 있으면 log_every 마다 val loss 도 재서 history 에 넣음.
     callback(history) 는 log_every 마다 불림. 노트북에서 loss 곡선 실시간으로 그릴 때 씀.
     """
+    if dataset is not None and not isinstance(dataset, torch.utils.data.IterableDataset) \
+            and len(dataset) < batch_size:
+        # drop_last=True 라 배치가 하나도 안 나와서 무한루프 됨. 조용히 도는 것보다 여기서 죽는 게 나음
+        raise ValueError(f"dataset has {len(dataset)} samples but batch_size is {batch_size}; "
+                         f"generate more data or lower the batch size")
     torch.manual_seed(seed)
     net = M.WaypointNet().to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=lr)

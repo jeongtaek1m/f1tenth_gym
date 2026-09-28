@@ -83,15 +83,15 @@ def dataset_spec(cfg: Config) -> dict:
                       "map_yaml": cfg.closed_loop.map_yaml}}
 
 
-def needs_regeneration(out_dir: str, cfg: Config) -> bool:
-    """labels.csv 없거나, 저장 당시 설정이 지금 cfg 와 다르면 True."""
+def needs_regeneration(out_dir: str, cfg: Config, n: int) -> bool:
+    """labels.csv 없거나, 저장 당시 설정·장 수가 지금과 다르면 True."""
     if not os.path.isfile(os.path.join(out_dir, LABELS_CSV)):
         return True
     spec_path = os.path.join(out_dir, SPEC_JSON)
     if not os.path.isfile(spec_path):
         return True                                       # 옛 포맷. 뭘로 만든 건지 모름
     with open(spec_path, encoding="utf-8") as f:
-        return json.load(f) != dataset_spec(cfg)
+        return json.load(f) != {"n": int(n), **dataset_spec(cfg)}
 
 
 def generate_dataset(track: Track, cfg: Config, n: int, out_dir: str, seed: int = 0,
@@ -119,7 +119,7 @@ def generate_dataset(track: Track, cfg: Config, n: int, out_dir: str, seed: int 
             if log_every and (i + 1) % log_every == 0:
                 print(f"{i + 1}/{n}", flush=True)
     with open(os.path.join(out_dir, SPEC_JSON), "w", encoding="utf-8") as f:
-        json.dump(dataset_spec(cfg), f, ensure_ascii=False, indent=1)
+        json.dump({"n": int(n), **dataset_spec(cfg)}, f, ensure_ascii=False, indent=1)
     return path
 
 
@@ -158,7 +158,8 @@ class DiskDataset(torch.utils.data.Dataset):
         spec_path = os.path.join(root, SPEC_JSON)
         if os.path.isfile(spec_path):
             with open(spec_path, encoding="utf-8") as f:
-                if json.load(f) != dataset_spec(cfg):
+                saved = json.load(f); saved.pop("n", None)        # 장 수는 학습엔 상관없음
+                if saved != dataset_spec(cfg):
                     raise ValueError(f"{root} was generated with a different config; regenerate it")
         self.files, self.poses, self.wps = read_labels(root)
         self.idx = split_indices(len(self.files), split, val_frac, seed)

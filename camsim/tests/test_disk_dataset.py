@@ -54,12 +54,13 @@ def test_train_on_disk_and_evaluate(ctx, tmp_path):
 def test_changed_config_is_detected(ctx):
     """설정 바뀌면 옛 데이터를 조용히 쓰면 안 됨. needs_regeneration 이 알려주고 DiskDataset 은 거부함."""
     cfg, trk, root = ctx
-    assert not dataset.needs_regeneration(root, cfg)
+    assert not dataset.needs_regeneration(root, cfg, 30)
+    assert dataset.needs_regeneration(root, cfg, 31)              # 장 수 바뀌어도 다시 만듦
     cfg2 = copy.deepcopy(cfg); cfg2.waypoints.ahead_m += 0.5
-    assert dataset.needs_regeneration(root, cfg2)
+    assert dataset.needs_regeneration(root, cfg2, 30)
     with pytest.raises(ValueError, match="different config"):
         dataset.DiskDataset(root, cfg2)
-    assert dataset.needs_regeneration(os.path.join(root, "nope"), cfg)
+    assert dataset.needs_regeneration(os.path.join(root, "nope"), cfg, 30)
 
 def test_augment_fn_hook_applied_at_load(ctx):
     cfg, trk, root = ctx

@@ -266,7 +266,7 @@ md('''
 실차에서도 IPM 으로 만든 BEV 를 같은 포맷으로 저장하면 아래 코드가 그대로 돎.
 ''')
 code('''
-if dataset.needs_regeneration(DATA_DIR, cfg):      # 없거나, 다른 설정으로 만든 데이터면
+if dataset.needs_regeneration(DATA_DIR, cfg, N_DATASET):      # 없거나, 다른 설정·장 수로 만든 데이터면
     t0 = time.time()
     dataset.generate_dataset(trk, cfg, N_DATASET, DATA_DIR, seed=0, log_every=5000)
     print(f"{N_DATASET}장 생성, {time.time() - t0:.0f}s")
