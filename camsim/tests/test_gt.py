@@ -34,7 +34,7 @@ def test_wraps_at_track_end(ctx):
     i = len(trk.center) - 3
     pose = np.array([*trk.center[i], trk.heading[i]])
     wp = gt.waypoint_ahead(pose, trk, cfg)
-    # 결승선을 넘어도 앞쪽에 있어야 한다. 리샘플 격자 때문에 정확히 ahead_m 은 아니다.
+    # 결승선 넘어도 앞쪽에 있어야 함. 리샘플 격자 때문에 정확히 ahead_m 은 아님
     assert np.all(np.isfinite(wp)) and wp[0] > cfg.waypoints.ahead_m * 0.6
 
 def test_sample_pose_within_bounds(ctx):
@@ -60,7 +60,7 @@ def test_body_corners_are_rectangle_around_pose(ctx):
 
 
 def test_crosses_tape_uses_car_body_and_local_tape(ctx):
-    """실격 = 차체 모서리가 그 지점의 테이프 안쪽 선을 넘음 (테이프 위치는 지점마다 다를 수 있다)."""
+    """실격 = 차체 모서리가 그 지점의 테이프 안쪽 선을 넘음 (테이프 위치는 지점마다 다를 수 있음)."""
     cfg, trk = ctx
     i = 10
     h = trk.heading[i]

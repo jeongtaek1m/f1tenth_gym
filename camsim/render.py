@@ -1,13 +1,13 @@
-"""테이프 트랙을 그린다. 앞에서 본 카메라 뷰와 위에서 본 BEV 두 가지.
+"""테이프 트랙을 그림. 앞에서 본 카메라 뷰와 위에서 본 BEV 두 가지.
 
-모델에 넣는 건 BEV 쪽이다. 원근 렌더(render)는 눈으로 확인하거나 IPM 과 비교할 때 쓴다.
+모델에 넣는 건 BEV 쪽. 원근 렌더(render)는 눈으로 확인하거나 IPM 과 비교할 때 씀.
 """
 import cv2
 import numpy as np
 from .config import Config
 from .camera import project
 
-# fillPoly 의 고정소수점 좌표. 1/16 px 단위로 그려서 테이프 가장자리가 계단지지 않게 한다.
+# fillPoly 의 고정소수점 좌표. 1/16 px 단위로 그려서 테이프 가장자리가 계단지지 않게
 _SHIFT = 4
 _SCALE = 1 << _SHIFT
 
@@ -22,11 +22,11 @@ def to_vehicle(pose, pts_world: np.ndarray) -> np.ndarray:
 def visible_quads(qv: np.ndarray, scan, cfg: Config) -> np.ndarray:
     """그릴 quad 만 골라내는 bool 마스크. qv 는 (M,4,2) 차량 좌표계.
 
-    near/far 컷은 차량 원점이 아니라 **카메라** 기준이어야 한다. offset_x_m > 0 이면 카메라가
-    후륜축보다 앞에 있어서, 차량 기준 x 가 0~offset_x_m 인 quad 는 실제로는 카메라 뒤에 있다.
-    이걸 놓치면 깊이가 음수인 채로 투영돼서 지평선 위에 거꾸로 나타난다. 실제로 겪은 버그다.
+    near/far 컷은 차량 원점이 아니라 **카메라** 기준이어야 함. offset_x_m > 0 이면 카메라가
+    후륜축보다 앞에 있어서, 차량 기준 x 가 0~offset_x_m 인 quad 는 실제로는 카메라 뒤에 있음.
+    이걸 놓치면 깊이가 음수인 채로 투영돼서 지평선 위에 거꾸로 나타남. 실제로 겪은 버그.
 
-    LiDAR 가림은 반대로 차량 기준을 쓴다. scan 이 카메라가 아니라 차량 pose 에서 나오기 때문.
+    LiDAR 가림은 반대로 차량 기준. scan 이 카메라가 아니라 차량 pose 에서 나오기 때문.
     """
     ctr = qv.mean(1)
     off = cfg.camera.offset_x_m
@@ -38,14 +38,14 @@ def visible_quads(qv: np.ndarray, scan, cfg: Config) -> np.ndarray:
         scan = np.asarray(scan)
         fov = cfg.render.lidar_fov_rad
         brg = np.arctan2(ctr[:, 1], ctr[:, 0])
-        # gym 은 빔 i 를 -fov/2 + i*fov/(n-1) 에 둔다. n-1 스텝이 fov 를 덮는다는 뜻.
+        # gym 은 빔 i 를 -fov/2 + i*fov/(n-1) 에 둠. n-1 스텝이 fov 를 덮는다는 뜻
         idx = np.rint((brg + fov / 2.0) / fov * (len(scan) - 1)).astype(int).clip(0, len(scan) - 1)
         keep &= rng < scan[idx]
     return keep
 
 
 def render(pose, quads_world: np.ndarray, scan, H_g2i: np.ndarray, cfg: Config) -> np.ndarray:
-    """앞에서 본 카메라 뷰. scan 을 주면 다른 차에 가린 테이프는 빠진다."""
+    """앞에서 본 카메라 뷰. scan 을 주면 다른 차에 가린 테이프는 빠짐."""
     W, Hh = cfg.camera.image_width, cfg.camera.image_height
     img = np.empty((Hh, W, 3), np.uint8)
     img[:] = cfg.lane.color_floor
@@ -68,7 +68,7 @@ def draw_points(img, pts_vehicle, H_g2i, color=(0, 255, 0), radius=4):
 
 
 # ---- BEV (위에서 본 그림) -----------------------------------------------------
-# 픽셀 규약: 위 = 전방(+x), 왼쪽 = 차량 좌측(+y). 범위와 해상도는 config 의 bev 섹션.
+# 픽셀 규약: 위 = 전방(+x), 왼쪽 = 차량 좌측(+y). 범위와 해상도는 config 의 bev 섹션
 
 def bev_size(cfg: Config):
     b = cfg.bev
@@ -86,7 +86,7 @@ def bev_pixels(pts_vehicle: np.ndarray, cfg: Config) -> np.ndarray:
 
 
 def ground_to_bev_matrix(cfg: Config) -> np.ndarray:
-    """bev_pixels 와 같은 변환을 3x3 행렬로. warpPerspective 에 넘길 때 쓴다."""
+    """bev_pixels 와 같은 변환을 3x3 행렬로. warpPerspective 에 넘길 때 씀."""
     b = cfg.bev
     r = b.resolution_m
     return np.array([[0.0, -1.0 / r, b.y_range_m[1] / r],
@@ -97,9 +97,9 @@ def ground_to_bev_matrix(cfg: Config) -> np.ndarray:
 def bev_visibility_mask(H_g2i: np.ndarray, cfg: Config) -> np.ndarray:
     """BEV 픽셀 중 카메라가 실제로 볼 수 있는 곳만 True 인 (h,w) 마스크.
 
-    실차 IPM 출력은 화각 밖과 코앞 사각지대가 비어 있다. 시뮬 BEV 도 같은 데를 가려줘야
-    모델이 보는 그림이 실차와 같아진다. 픽셀 중심을 지면 좌표로 바꿔 카메라에 투영해 보고,
-    이미지 안에 떨어지는지(깊이 > 0) near 컷을 통과하는지 본다.
+    실차 IPM 출력은 화각 밖과 코앞 사각지대가 비어 있음. 시뮬 BEV 도 같은 데를 가려줘야
+    모델이 보는 그림이 실차와 같아짐. 픽셀 중심을 지면 좌표로 바꿔 카메라에 투영해 보고,
+    이미지 안에 떨어지는지(깊이 > 0) near 컷을 통과하는지 봄.
     """
     h, w = bev_size(cfg)
     b = cfg.bev
@@ -117,10 +117,10 @@ def bev_visibility_mask(H_g2i: np.ndarray, cfg: Config) -> np.ndarray:
 
 
 def render_bev(pose, quads_world: np.ndarray, cfg: Config, mask: np.ndarray = None) -> np.ndarray:
-    """모델 입력용 BEV. 테이프를 지오메트리에서 바로 위에서 내려다본 모양으로 그린다.
+    """모델 입력용 BEV. 테이프를 지오메트리에서 바로 위에서 내려다본 모양으로 그림.
 
-    원근 렌더나 IPM 을 거치지 않으므로 빠르고 정확하다. mask(bev_visibility_mask)를 주면
-    카메라가 못 보는 영역이 바닥색으로 덮여 실차 IPM 출력과 같은 모양이 된다.
+    원근 렌더나 IPM 을 거치지 않아 빠르고 정확함. mask(bev_visibility_mask)를 주면
+    카메라가 못 보는 영역이 바닥색으로 덮여 실차 IPM 출력과 같은 모양이 됨.
     """
     h, w = bev_size(cfg)
     img = np.empty((h, w, 3), np.uint8)
@@ -147,7 +147,7 @@ def draw_points_bev(img_bev, pts_vehicle, cfg: Config, color=(0, 255, 0), radius
 
 
 def ipm_bev(img_perspective: np.ndarray, H_i2g: np.ndarray, cfg: Config) -> np.ndarray:
-    """실차가 쓰는 경로. 원근 영상을 H_i2g 로 지면에 펴서 BEV 규격으로 맞춘다."""
+    """실차가 쓰는 경로. 원근 영상을 H_i2g 로 지면에 펴서 BEV 규격으로 맞춤."""
     h, w = bev_size(cfg)
     H_img2bev = ground_to_bev_matrix(cfg) @ H_i2g
     floor = tuple(int(c) for c in cfg.lane.color_floor)

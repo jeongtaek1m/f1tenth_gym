@@ -32,7 +32,7 @@ ALL = [augment.jitter_bev, augment.ipm_blur, augment.erase_patches, augment.illu
 
 
 def test_defaults_are_identity(cfg, bev):
-    """기본 config 에서는 모든 증강이 항등이어야 한다 (plain 모델)."""
+    """기본 config 에서는 모든 증강이 항등이어야 함 (plain 모델)."""
     for fn in ALL:
         assert np.array_equal(fn(bev, cfg, rng()), bev), fn.__name__
     assert np.array_equal(augment.example_augment(bev, cfg, rng()), bev)
@@ -75,7 +75,7 @@ def test_illumination_is_non_uniform(cfg, bev):
     out = augment.illumination(bev, cfg, rng()).astype(float)
     b = bev.astype(float)
     ratio = (out + 1) / (b + 1)
-    assert ratio.max() - ratio.min() > 0.3                          # 화면 위치마다 배율이 다르다
+    assert ratio.max() - ratio.min() > 0.3                          # 화면 위치마다 배율이 다름
 
 
 def test_shadow_darkens_a_region(cfg, bev):
@@ -83,7 +83,7 @@ def test_shadow_darkens_a_region(cfg, bev):
     cfg.augment.shadow_darkness = [0.3, 0.3]
     out = augment.shadow(bev, cfg, rng())
     darker = (out.astype(int) < bev.astype(int) - 10).any(-1)
-    assert 0.02 < darker.mean() < 0.98                              # 일부만 어두워진다
+    assert 0.02 < darker.mean() < 0.98                              # 일부만 어두워짐
 
 
 def test_noise_and_jpeg_perturb(cfg, bev):
@@ -96,7 +96,7 @@ def test_noise_and_jpeg_perturb(cfg, bev):
 
 
 def test_ipm_blur_is_stronger_far_away(cfg):
-    """먼 곳(위쪽 행)이 가까운 곳(아래쪽 행)보다 더 뭉개져야 한다."""
+    """먼 곳(위쪽 행)이 가까운 곳(아래쪽 행)보다 더 뭉개져야 함."""
     h, w = render.bev_size(cfg)
     img = np.full((h, w, 3), 0, np.uint8)
     img[:, ::20] = 255                                              # 세로 줄무늬

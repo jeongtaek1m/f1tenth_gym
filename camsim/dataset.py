@@ -1,13 +1,13 @@
-"""학습 데이터. 모델 입력은 BEV, 라벨은 waypoint 하나의 (x, y) 다.
+"""학습 데이터. 모델 입력은 BEV, 라벨은 waypoint 하나의 (x, y).
 
   시뮬 : pose -> render_bev -> 카메라 가시 마스크 -> (증강)
   실차 : 카메라 -> undistort -> IPM
 
-둘 다 config 의 bev 섹션(범위·해상도)을 공유하니까 같은 모델에 그대로 들어간다.
-실차에서 찍은 BEV 를 labels.csv 포맷으로 저장하면 여기 코드를 그대로 쓸 수 있다.
+둘 다 config 의 bev 섹션(범위·해상도)을 공유하니까 같은 모델에 그대로 들어감.
+실차에서 찍은 BEV 를 labels.csv 포맷으로 저장하면 여기 코드 그대로 쓸 수 있음.
 
 Dataset 이 둘인데, SynthDataset 은 디스크 없이 매 샘플 새로 그리고, DiskDataset 은 미리 저장해 둔
-폴더를 읽는다. 노트북은 DiskDataset 쪽을 쓴다 (같은 데이터로 반복 학습해야 비교가 되니까).
+폴더를 읽음. 노트북은 DiskDataset 쪽 (같은 데이터로 반복 학습해야 비교가 되니까).
 """
 import csv
 import json
@@ -28,12 +28,12 @@ def to_tensor(img_bgr: np.ndarray) -> torch.Tensor:
 
 def make_sample(track: Track, cfg: Config, rng: np.random.Generator, augment_fn=None,
                 mask: np.ndarray = None, with_camera: bool = False):
-    """pose 하나를 뽑아 (bev, waypoint (x, y) m, pose) 를 만든다.
+    """pose 하나 뽑아 (bev, waypoint (x, y) m, pose) 를 만듦.
 
     augment_fn : f(bev, rng) -> bev. 라벨은 증강과 무관한 참값이라, 증강은 "같은 정답을
-                 다르게 본 것"이어야 한다 (augment.py 맨 위 참고).
-    mask       : bev_visibility_mask 결과. 안 주면 여기서 계산하는데 느리다. 반복 호출할 거면 미리 만들 것.
-    with_camera: 원근 카메라 뷰도 같이 렌더. 시각화 전용이고 학습에는 안 쓴다.
+                 다르게 본 것"이어야 함 (augment.py 맨 위 참고).
+    mask       : bev_visibility_mask 결과. 안 주면 여기서 계산하는데 느림. 반복 호출할 거면 미리 만들 것.
+    with_camera: 원근 카메라 뷰도 같이 렌더. 시각화 전용, 학습엔 안 씀.
     """
     from .camera import build
     H_g2i = build(cfg)[0]
@@ -50,7 +50,7 @@ def make_sample(track: Track, cfg: Config, rng: np.random.Generator, augment_fn=
 
 
 class SynthDataset(IterableDataset):
-    """디스크를 안 쓰고 매번 새로 그리는 무한 스트림."""
+    """디스크 안 쓰고 매번 새로 그리는 무한 스트림."""
 
     def __init__(self, track: Track, cfg: Config, seed: int = 0, augment_fn=None):
         from .camera import build
@@ -76,7 +76,7 @@ LABEL_HEADER = ["file", "x", "y", "theta", "wp_x", "wp_y"]
 
 
 def dataset_spec(cfg: Config) -> dict:
-    """생성된 이미지와 라벨에 영향을 주는 설정 전부. 이게 바뀌었으면 데이터를 다시 만들어야 한다."""
+    """생성된 이미지와 라벨에 영향 주는 설정 전부. 이게 바뀌었으면 데이터 다시 만들어야 함."""
     return {"camera": asdict(cfg.camera), "lane": asdict(cfg.lane), "bev": asdict(cfg.bev),
             "waypoints": asdict(cfg.waypoints), "sampling": asdict(cfg.sampling),
             "track": {"centerline_csv": cfg.closed_loop.centerline_csv,
@@ -84,23 +84,23 @@ def dataset_spec(cfg: Config) -> dict:
 
 
 def needs_regeneration(out_dir: str, cfg: Config) -> bool:
-    """labels.csv 가 없거나, 저장 당시 설정이 지금 cfg 와 다르면 True."""
+    """labels.csv 없거나, 저장 당시 설정이 지금 cfg 와 다르면 True."""
     if not os.path.isfile(os.path.join(out_dir, LABELS_CSV)):
         return True
     spec_path = os.path.join(out_dir, SPEC_JSON)
     if not os.path.isfile(spec_path):
-        return True                                       # 옛 포맷. 무엇으로 만든 건지 모른다
+        return True                                       # 옛 포맷. 뭘로 만든 건지 모름
     with open(spec_path, encoding="utf-8") as f:
         return json.load(f) != dataset_spec(cfg)
 
 
 def generate_dataset(track: Track, cfg: Config, n: int, out_dir: str, seed: int = 0,
                      augment_fn=None, log_every: int = 2000) -> str:
-    """BEV n 장을 out_dir/images/*.png 와 labels.csv 로 저장하고 labels.csv 경로를 돌려준다.
+    """BEV n 장을 out_dir/images/*.png 와 labels.csv 로 저장하고 labels.csv 경로 반환.
 
-    저장되는 건 증강 없는 원본이다. 증강은 보통 로딩 때 DiskDataset(augment_fn=...) 로 넣는다.
-    그래야 같은 데이터로 증강만 바꿔 가며 비교할 수 있다. 같이 저장하는 spec.json 으로
-    나중에 설정이 바뀌었는지 알 수 있다.
+    저장되는 건 증강 없는 원본. 증강은 보통 로딩 때 DiskDataset(augment_fn=...) 로 넣음.
+    그래야 같은 데이터로 증강만 바꿔 가며 비교 가능. 같이 저장하는 spec.json 으로 나중에
+    설정 바뀌었는지 알 수 있음.
     """
     from .camera import build
     img_dir = os.path.join(out_dir, IMAGES_DIR)
@@ -136,7 +136,7 @@ def read_labels(out_dir: str):
 
 
 def split_indices(n: int, split: str, val_frac: float = 0.1, seed: int = 0) -> np.ndarray:
-    """seed 만 같으면 언제 불러도 같은 train/val 분리가 나온다."""
+    """seed 만 같으면 언제 불러도 같은 train/val 분리."""
     perm = np.random.default_rng(seed).permutation(n)
     n_val = int(round(n * val_frac))
     if split == "all":
@@ -149,11 +149,11 @@ def split_indices(n: int, split: str, val_frac: float = 0.1, seed: int = 0) -> n
 
 
 class DiskDataset(torch.utils.data.Dataset):
-    """generate_dataset 이 만든 폴더를 읽는다. __getitem__ -> (tensor (3,h,w), target (2,))."""
+    """generate_dataset 이 만든 폴더를 읽음. __getitem__ -> (tensor (3,h,w), target (2,))."""
 
     def __init__(self, root: str, cfg: Config, split: str = "train", val_frac: float = 0.1,
                  seed: int = 0, augment_fn=None):
-        """augment_fn: f(bev_bgr, rng) -> bev_bgr, 로딩 때 적용. None 이면 저장된 이미지 그대로 쓴다."""
+        """augment_fn: f(bev_bgr, rng) -> bev_bgr, 로딩 때 적용. None 이면 저장된 이미지 그대로."""
         self.root, self.cfg, self.augment_fn = root, cfg, augment_fn
         spec_path = os.path.join(root, SPEC_JSON)
         if os.path.isfile(spec_path):
@@ -177,7 +177,7 @@ class DiskDataset(torch.utils.data.Dataset):
     def __getitem__(self, i: int):
         img = self.load_image(i)
         if self.augment_fn is not None:
-            # 같은 이미지라도 epoch 마다 다르게 증강되도록 torch 쪽 난수를 섞어 넣는다.
+            # 같은 이미지라도 epoch 마다 다르게 증강되도록 torch 쪽 난수를 섞어 넣음
             rng = np.random.default_rng([self.seed, int(self.idx[i]), int(torch.randint(0, 2**31 - 1, (1,)))])
             img = self.augment_fn(img, rng)
         wp = self.wps[self.idx[i]]

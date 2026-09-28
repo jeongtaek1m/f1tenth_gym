@@ -1,524 +1,542 @@
-"""notebooks/camsim_lab.ipynb 를 만든다. 노트북 내용의 원본은 이 파일이다.
+"""notebooks/camsim_lab.ipynb 생성기. 노트북 내용의 원본은 이 파일임.
 
-노트북을 고칠 일이 있으면 .ipynb 를 직접 건드리지 말고 여기를 고친 뒤 다시 생성한다.
-(직접 고치면 다음 생성 때 덮어써진다.)
+노트북 고칠 일 있으면 .ipynb 말고 여기를 고치고 다시 생성할 것 (직접 고치면 다음 생성 때 덮어써짐).
 
     python camsim/scripts/build_notebook.py
-
-CAMSIM_SMOKE=1 로 실행하면 노트북이 데이터 300장 / 30스텝으로 줄어든다. 자동 검증용이다.
 """
 import json
 import os
+import textwrap
 
 cells = []
 
 
-def _id():
-    return f"cell-{len(cells):02d}"
+def md(text):
+    cells.append({"cell_type": "markdown", "id": f"cell-{len(cells):02d}", "metadata": {},
+                  "source": textwrap.dedent(text).strip("\n").splitlines(keepends=True)})
 
 
-def md(*lines):
-    cells.append({"cell_type": "markdown", "id": _id(), "metadata": {}, "source": [l + "\n" for l in lines]})
+def code(text):
+    cells.append({"cell_type": "code", "id": f"cell-{len(cells):02d}", "metadata": {},
+                  "execution_count": None, "outputs": [],
+                  "source": textwrap.dedent(text).strip("\n").splitlines(keepends=True)})
 
 
-def code(*lines):
-    cells.append({"cell_type": "code", "id": _id(), "metadata": {}, "execution_count": None, "outputs": [],
-                  "source": [l + "\n" for l in lines]})
+# =========================================================================== 0. 설정
+md('''
+# camsim 실습 — 카메라 기반 waypoint 모델
 
+`f1tenth_gym` 은 카메라를 못 그림. 근데 바닥 테이프 트랙은 전부 평면이라, 캘리브레이션 행렬 하나로
+"이 자리에서 카메라로 보면 이렇게 보인다"를 계산할 수 있음. 이 노트북은 그 지오메트리로 **BEV 학습 데이터**를
+만들고, waypoint CNN 을 학습하고, gym 안에서 폐루프로 검증함.
 
-# --------------------------------------------------------------------------- 0. 설정
-md("# camsim 실습 노트북 — 카메라 기반 waypoint 모델",
-   "",
-   "`f1tenth_gym` 은 카메라를 그리지 못한다. 그런데 바닥 테이프 트랙은 전부 평면이라, 캘리브레이션 행렬 하나면",
-   "\"이 자리에서 카메라로 보면 이렇게 보인다\"를 계산할 수 있다. 이 노트북은 그 지오메트리로 **BEV 학습 데이터**를",
-   "만들고, waypoint CNN 을 학습하고, gym 안에서 폐루프로 검증한다.",
-   "",
-   "모델이 보는 건 앞에서 본 영상이 아니라 위에서 내려다본 BEV 다. 시뮬은 BEV 를 바로 그리고,",
-   "실차는 카메라 영상을 IPM 으로 펴서 같은 규격의 BEV 를 만든다. 그래야 여기서 학습한 가중치가 실차로 넘어간다.",
-   "",
-   "**진행 방법**: 각 장 첫 셀의 파라미터를 바꾸고 그 장을 다시 실행하면서 뭐가 달라지는지 본다.",
-   "노트북 하나가 커널 하나라, 앞 장에서 만든 것(데이터, 모델)을 뒤 장에서 그대로 쓴다.",
-   "",
-   "| 장 | 내용 | 바꿔 볼 값 |",
-   "|---|---|---|",
-   "| 1 | 카메라와 트랙 | 카메라 높이·pitch·화각, 테이프 배치, 색 |",
-   "| 2 | 정답(GT)과 데이터셋 | 정답 경로 기준(center/racing), pose 샘플링 범위, waypoint 거리, 장 수 |",
-   "| 3 | 학습 + sim-to-real 과제 | 스텝, 배치, 학습률, 증강 함수 |",
-   "| 4 | 폐루프 | 속도, lookahead, 지연, 인지 노이즈 |",
-   "| 5 | 결과 보관 | |")
+모델이 보는 건 앞에서 본 영상이 아니라 위에서 내려다본 BEV. 시뮬은 BEV 를 바로 그리고,
+실차는 카메라 영상을 IPM 으로 펴서 같은 규격의 BEV 를 만듦. 그래야 여기서 학습한 가중치가 실차로 넘어감.
 
-md("## 0. 설치와 설정",
-   "실행 전에 메뉴에서 두 가지. **런타임 > 런타임 유형 변경 > T4 GPU** (안 하면 학습이 10배 넘게 느리다),",
-   "**파일 > 드라이브에 사본 저장** (안 하면 수정한 게 안 남는다).",
-   "",
-   "첫 셀은 레포 루트를 찾아 그리로 이동한다. 데이터와 모델은 항상 레포 루트에 저장된다.",
-   "코랩에서 레포가 없으면 clone 하고 의존성을 설치한다. 이미 있으면 `git pull --ff-only` 로 갱신한다.",
-   "",
-   "코드를 갱신한 뒤 `TypeError: unexpected keyword` 같은 게 나오면 커널에 예전 모듈이 남아 있는 것이다.",
-   "런타임을 재시작하고 첫 셀부터 다시 실행하면 된다. 데이터는 VM 에 남아 있어서 설정이 같으면 2장이 그대로 재사용한다.",
-   "",
-   "설정을 바꿀 때는 **아래 파라미터 셀**을 고친다. `camsim/config.yaml` 을 직접 고치면 파라미터 셀이",
-   "덮어써서 효과가 없고, 다음 실행 때 `git pull` 이 충돌한다. 실수로 고쳤으면 `!git checkout -- .` 로 되돌린다.")
-code('REPO_URL = "https://github.com/jeongtaek1m/f1tenth_gym.git"   # 다른 fork 를 쓰려면 여기만 바꾸세요',
-     'BRANCH = "main"',
-     'import os, subprocess, sys, importlib.util',
-     '',
-     'def find_repo_root(start="."):',
-     '    """camsim/config.yaml 이 있는 폴더를 위로 올라가며 찾는다.',
-     '    VSCode 의 Jupyter 커널은 notebooks/ 를 작업 폴더로 잡기 때문에 이 과정이 필요하다."""',
-     '    d = os.path.abspath(start)',
-     '    while True:',
-     '        if os.path.isfile(os.path.join(d, "camsim", "config.yaml")):',
-     '            return d',
-     '        parent = os.path.dirname(d)',
-     '        if parent == d:',
-     '            return None',
-     '        d = parent',
-     '',
-     'root = find_repo_root()',
-     'if root:',
-     '    os.chdir(root)',
-     '    if os.getcwd().startswith("/content"):',
-     '        subprocess.run(["git", "pull", "--ff-only"], check=True)',
-     'else:',
-     '    if os.path.isdir("f1tenth_gym"):',
-     '        subprocess.run(["git", "-C", "f1tenth_gym", "pull", "--ff-only"], check=True)',
-     '    else:',
-     '        subprocess.run(["git", "clone", "--branch", BRANCH, REPO_URL, "f1tenth_gym"], check=True)',
-     '    assert os.path.isfile("f1tenth_gym/camsim/config.yaml"), "clone 실패: REPO_URL/BRANCH 를 확인하세요"',
-     '    os.chdir("f1tenth_gym")',
-     'if os.getcwd().startswith("/content"):',
-     '    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", "camsim/requirements.txt"], check=True)',
-     '    subprocess.run(["apt-get", "install", "-y", "-q", "libgl1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)   # f110_gym 이 pyglet 을 import 하면서 GL 을 찾는다',
-     '    if importlib.util.find_spec("torch") is None:',
-     '        raise RuntimeError("Colab 런타임에 PyTorch가 없습니다. 런타임 유형과 설치 상태를 확인하세요.")',
-     '    if importlib.util.find_spec("gym") is None:',
-     '        subprocess.run(["bash", "camsim/scripts/install_gym019.sh", sys.executable], check=True)',
-     '    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-deps", "-e", "."], check=True)',
-     'print("작업 폴더(데이터·모델이 저장되는 곳):", os.getcwd())',
-     'subprocess.run(["git", "log", "-1", "--format=code version: %h %cd", "--date=short"], check=True)',
-     'import camsim.dataset, inspect',
-     'print("커널이 로드한 코드:", "최신 (augment_fn 있음)" if "augment_fn" in inspect.signature(camsim.dataset.DiskDataset.__init__).parameters else "예전 모듈 — 런타임 재시작 필요!")')
+**진행**: 각 장 첫 셀의 파라미터를 바꾸고 그 장을 다시 실행하면서 뭐가 달라지는지 봄.
+커널 하나라 앞 장에서 만든 것(데이터, 모델)을 뒤 장에서 그대로 씀.
 
-md("### 환경 확인",
-   "뭐가 깔렸고 어떤 모드가 되는지 본다. 전부 O 여야 한다. X 가 있으면 위 설치 셀 출력에서 에러를 찾는다.")
-code('!{sys.executable} camsim/scripts/check_env.py')
+| 장 | 내용 | 바꿔 볼 값 |
+|---|---|---|
+| 1 | 카메라와 트랙 | 카메라 높이·pitch·화각, 테이프 배치, 색 |
+| 2 | 정답(GT)과 데이터셋 | 정답 경로 기준(center/racing), pose 샘플링 범위, waypoint 거리, 장 수 |
+| 3 | 학습 + sim-to-real 과제 | 스텝, 배치, 학습률, 증강 함수 |
+| 4 | 폐루프 | 속도, 지연, 인지 노이즈 |
+| 5 | 결과 보관 | |
+''')
 
-md("### 테스트 (선택)",
-   "코드가 이 런타임에서 제대로 도는지 확인한다. 2~3분 걸린다. 처음 한 번, 그리고 코드를 pull 받은 뒤에 돌리면 된다.")
-code('!{sys.executable} -m pytest camsim/tests -q')
+md('''
+## 0. 설치와 설정
 
-code('try:      # 켜 두면 첫 셀에서 pull 받은 코드가 커널 재시작 없이 반영된다',
-     '    get_ipython().run_line_magic("load_ext", "autoreload"); get_ipython().run_line_magic("autoreload", "2")',
-     'except Exception as e:',
-     '    print("autoreload 사용 불가 —", type(e).__name__, "(코드가 갱신되면 런타임 재시작 후 첫 셀부터)")',
-     'import sys, json, time, numpy as np, cv2, torch, pandas as pd',
-     'import matplotlib.pyplot as plt',
-     'plt.rcParams["axes.unicode_minus"] = False   # 그래프 글자는 영어로. 코랩 기본 폰트에 한글이 없다',
-     'from IPython.display import Image, Video, display, clear_output',
-     'sys.path.insert(0, os.getcwd())',
-     'from camsim import config, camera, track, render, gt, augment, dataset, model, train, closed_loop, viz, handoff',
-     '',
-     'def show(img_bgr, width=640, title=None):',
-     '    """BGR numpy 이미지를 임시 파일 없이 셀 출력에 띄운다."""',
-     '    if title: print(title)',
-     '    display(Image(data=cv2.imencode(".png", img_bgr)[1].tobytes(), width=width))',
-     '',
-     'os.makedirs("out", exist_ok=True)',
-     'SMOKE = os.environ.get("CAMSIM_SMOKE") == "1"      # 자동 검증용. 데이터와 학습을 확 줄인다',
-     'DEVICE = "cuda" if torch.cuda.is_available() else "cpu"',
-     'print("device:", DEVICE, "| torch", torch.__version__, "| numpy", np.__version__)',
-     'if DEVICE == "cpu":',
-     '    print("경고: GPU 가 없다. 런타임 > 런타임 유형 변경 > T4 GPU 로 바꾸고 처음부터 다시 실행할 것. CPU 로는 학습이 매우 느리다.")')
+실행 전에 메뉴에서 두 가지. **런타임 > 런타임 유형 변경 > T4 GPU** (안 하면 학습이 10배 넘게 느림),
+**파일 > 드라이브에 사본 저장** (안 하면 수정한 게 안 남음).
 
-md("### 파라미터",
-   "`camsim/config.yaml` 이 기본값이고 이 셀이 그 위에 덮어쓴다. **값을 바꿨으면 항상 이 셀을 먼저 다시 실행한다.**",
-   "여기서 `cfg` 를 새로 만들기 때문이다. 그 다음 어디까지 다시 실행할지는 뭘 바꿨느냐에 달렸다.",
-   "설치 셀은 세션에 한 번이면 된다.",
-   "",
-   "| 바꾼 것 | 다시 실행할 곳 |",
-   "|---|---|",
-   "| `STEPS`, `BATCH`, `LR`, `AUGMENT_FN` | 이 셀 → 3장 |",
-   "| `speed_mps`, `LATENCIES`, `SIGMAS` | 이 셀 → 4장 |",
-   "| 카메라, 테이프 배치, `waypoints.line`, `ahead_m`, `sampling.*` | 이 셀 → 2장(설정이 바뀐 걸 알아채고 다시 만든다) → 3장 → 4장 |",
-   "| 코드를 `git pull` 로 갱신 | 커널 재시작 → 첫 셀부터 |",
-   "",
-   "카메라나 트랙을 바꾸고 데이터를 다시 만들지 않으면, 예전 설정으로 만든 이미지에 새 설정의 정답을 맞추는",
-   "꼴이 된다. 이러면 학습은 도는데 결과가 이상해지고 원인을 찾기가 아주 어렵다.")
-code('cfg = config.load()',
-     '',
-     '# ---- 1장: 카메라와 트랙 ----',
-     'cfg.camera.height_m   = 0.20      # 바닥에서 렌즈 중심까지 (m). 마운트 확정 전 가정값',
-     'cfg.camera.pitch_deg  = 0.0       # 아래로 숙인 각도 (+ = 아래). 정면이면 0',
-     'cfg.camera.hfov_deg   = 90.0      # 렌즈 수평 화각',
-     'cfg.lane.follow_walls  = True     # True 면 맵의 벽 안쪽을 따라 테이프를 놓는다 (폭이 구간마다 다름)',
-     'cfg.lane.wall_margin_m = 0.25     # 벽에서 얼마나 안쪽에 놓을지',
-     'cfg.lane.track_width_m = 0.8      # follow_walls = False 일 때의 좌우 테이프 간격',
-     'cfg.lane.color_floor  = [128, 128, 128]   # BGR. 회색 바닥',
-     'cfg.lane.color_tape   = [0, 220, 255]     # BGR. 노란 테이프',
-     '',
-     '# ---- 2장: GT와 데이터 ----',
-     'cfg.waypoints.line = "center"     # 정답 경로 기준. "center" = 좌우 테이프 중간선 (실차 라벨링과 같음)',
-     '                                  #                "racing" = CSV 의 레이싱 라인 (코너 안쪽)',
-     'cfg.waypoints.ahead_m = 1.0       # 예측할 waypoint 의 전방 거리 (m). 이 점이 곧 pure pursuit 목표점. 2 m 를 넘기지 말 것',
-     'cfg.sampling.lateral_frac = 0.35  # 기준선에서 ±트랙폭*frac 범위에 pose 를 뿌린다',
-     'cfg.sampling.heading_deg  = 15.0  # 헤딩도 ± 이만큼',
-     'N_DATASET = 300 if SMOKE else 20000     # 저장할 장 수',
-     'DATA_DIR = "out/dataset"',
-     '',
-     '# ---- 3장: 학습 ----',
-     'STEPS = 30 if SMOKE else 3000',
-     'BATCH = 8 if SMOKE else 32',
-     'LR = 1e-3',
-     '',
-     '# 증강 세기. 기본 학습은 증강 없이(plain) 하고, 아래 값들은 3장 sim-to-real 과제에서 쓴다.',
-     'cfg.augment.pitch_jitter_deg = 2.0    # 가감속 때 pitch 가 변해 BEV 가 휘는 정도 (도)',
-     'cfg.augment.ipm_blur_max_px = 9       # 먼 곳일수록 커지는 블러',
-     'cfg.augment.tape_dropout_prob = 0.3   # 테이프 마모·가림',
-     'cfg.augment.brightness_delta = 40     # 노출 변화',
-     'cfg.augment.contrast_range = [0.8, 1.2]',
-     'cfg.augment.gamma_range = [0.7, 1.5]',
-     'cfg.augment.hue_shift_deg = 15        # 조명 색온도',
-     'cfg.augment.sat_scale = [0.7, 1.3]',
-     'cfg.augment.illum_strength = 0.3      # 불균일 조명',
-     'cfg.augment.shadow_prob = 0.3',
-     'cfg.augment.blur_max_px = 5',
-     'cfg.augment.noise_sigma = 6',
-     'cfg.augment.jpeg_quality = [40, 90]   # image_transport compressed 아티팩트',
-     '',
-     '# ---- 4장: 폐루프 ----',
-     'cfg.closed_loop.speed_mps = 2.0',
-     'cfg.closed_loop.max_steps = 200 if SMOKE else 4000',
-     'LATENCIES = [0, 3] if SMOKE else [0, 2, 4, 6]             # 제어 틱 단위 지연 (1틱 = 1/control_hz 초)',
-     'SIGMAS = [0.0, 0.1] if SMOKE else [0.0, 0.05, 0.1, 0.2]   # 인지 노이즈 σ (m)',
-     '',
-     'trk = track.from_csv(cfg.closed_loop.centerline_csv, cfg)',
-     'H_g2i, H_i2g = camera.build(cfg)',
-     'print(f"트랙 길이 {trk.length:.1f} m, 테이프 사각형 {len(trk.quads)}개, 초점거리 {camera.focal_px(cfg):.0f} px")')
+첫 셀이 레포를 clone 하고 의존성을 설치함 (1~2분). 다시 실행하면 pull 만 함.
+`numpy.dtype size changed` 가 뜨면 런타임 재시작 후 첫 셀부터 다시.
 
-# --------------------------------------------------------------------------- 1. 카메라와 트랙
-md("## 1. 카메라와 트랙",
-   "지면(z=0)과 이미지 사이는 homography `H` 하나로 닫힌다. 실차 IPM 에서 구하는 `H_i2g` 의 역행렬이 곧 합성 카메라다.",
-   "높이 0.2 m 에 정면(pitch 0)으로 달면 지평선이 이미지 세로 한가운데 온다. `pitch_deg` 와 `height_m` 을 바꿔",
-   "다시 실행해 보면 지평선이 어디로 가는지, 가까운 바닥이 어디부터 보이는지 확인할 수 있다.")
-code('horizon_v = camera.project(H_g2i, np.array([[1000.0, 0.0]]))[0, 1]',
-     'near_x = camera.project(H_i2g, np.array([[cfg.camera.image_width / 2, cfg.camera.image_height]]))[0, 0]',
-     'print(f"지평선 행 v = {horizon_v:.0f} px (이미지 높이 {cfg.camera.image_height}), 가장 가까운 보이는 바닥 = {near_x:.2f} m")',
-     '',
-     'i = 50',
-     'pose = np.array([*trk.center[i], trk.heading[i]])',
-     'wp = gt.waypoint_ahead(pose, trk, cfg)',
-     'img_raw = render.render(pose, trk.quads, None, H_g2i, cfg)      # 순수 카메라 뷰. 아래 IPM 비교에 쓴다',
-     'cam_view = render.draw_points(img_raw.copy(), wp, H_g2i)',
-     'show(cam_view, title="합성 카메라 뷰 (초록 = GT waypoint). 모델은 이 그림이 아니라 이걸 펴서 만든 BEV 를 본다")')
+설정은 아래 **파라미터 셀**에서 바꿈. `camsim/config.yaml` 을 직접 고치면 파라미터 셀이 덮어써서 효과 없고,
+다음 실행 때 `git pull` 이 충돌함. 실수로 고쳤으면 `!git checkout -- .`
+''')
+code('''
+%%bash
+# 코랩 첫 실행이면 clone + 설치, 다시 실행이면 pull 만. 다른 fork 쓰려면 URL 만 바꿈
+set -e
+cd /content
+[ -d f1tenth_gym ] || git clone -q --branch main https://github.com/jeongtaek1m/f1tenth_gym.git
+cd f1tenth_gym
+git pull -q --ff-only
+pip install -q -r camsim/requirements.txt
+apt-get install -y -q libgl1 > /dev/null                                     # f110_gym 이 pyglet 통해 GL 찾음
+python -c "import gym" 2>/dev/null || bash camsim/scripts/install_gym019.sh  # gym 0.19 는 setup.py 오타 때문에 따로 깖
+pip install -q --no-deps -e .                                                # numpy 는 코랩 기본값 그대로 두려고 --no-deps
+''')
 
-md("### 트랙 어디인가",
-   "차 주변을 위에서 본 그림이다. 검은 띠가 gym 맵의 벽, 하늘색 부채꼴이 카메라 화각, 보라 사각형이 BEV 범위,",
-   "초록이 GT waypoint 다.",
-   "",
-   "실차 트랙에는 벽이 없고 테이프가 경계다. 벽은 gym 충돌과 LiDAR 에만 쓰이고 카메라 모델은 테이프만 본다.",
-   "`follow_walls = True` 면 테이프를 맵의 벽 안쪽 `wall_margin_m` 지점에 놓아서 트랙 모양이 맵과 같아진다.",
-   "대신 폭이 구간마다 다르다. `False` 면 중심선에서 `track_width_m/2` 로 일정하게 놓는다 (실습실 테이프 트랙 방식).")
-code('mapimg = viz.MapImage(cfg.closed_loop.map_yaml)',
-     'show(viz.local_view(pose, trk, wp, cfg, mapimg), width=500, title="차 주변 top-down (위 = 차량 전방)")',
-     'overview, off = viz.draw_track_on_map(mapimg, trk, cfg)',
-     'viz.mark_poses_on_map(overview, off, mapimg, [pose])',
-     'show(overview, width=600, title="전체 맵에서의 위치")')
+md('''
+### 환경 확인
+뭐가 깔렸고 어떤 모드가 되는지. 전부 O 여야 함. X 있으면 위 셀 출력에서 에러 찾을 것.
+''')
+code('''
+%cd /content/f1tenth_gym
+!python camsim/scripts/check_env.py
+''')
 
-md("### BEV 세 장: 정답 / 시뮬 모델 입력 / 실차 IPM",
-   "왼쪽은 지오메트리에서 바로 그린 top-down 이라 참값이다.",
-   "가운데는 거기에 **카메라 가시 마스크**를 씌운 것이다. 카메라가 못 보는 코앞과 화각 밖을 바닥색으로 덮었고,",
-   "이게 **시뮬 학습 데이터**다.",
-   "오른쪽은 위 카메라 뷰를 `H_i2g` 로 편 것, 즉 실차 IPM 이 만들어 낼 BEV 다.",
-   "",
-   "**가운데와 오른쪽이 같은 모양이어야** 시뮬에서 학습한 가중치가 실차로 넘어간다.",
-   "멀어질수록 오른쪽이 늘어지고 끊기는데 그게 IPM 의 해상도 한계다. 이 카메라(높이 0.2 m)로는 1.5 m 까지 테이프 위치가 0.3 cm 안에서 복구되고, 2 m 를 넘으면 코너에서 10 cm 씩 튄다. waypoint 를 1 m 에 두는 이유다.")
-code('vis_mask = render.bev_visibility_mask(H_g2i, cfg)',
-     'bev_true = render.render_bev(pose, trk.quads, cfg)',
-     'bev_sim = render.render_bev(pose, trk.quads, cfg, vis_mask)      # 모델 입력',
-     'bev_ipm = render.ipm_bev(img_raw, H_i2g, cfg)',
-     'show(viz.side_by_side(bev_true, bev_sim, bev_ipm), width=900, title=f"정답 | 시뮬 모델 입력 | 실차 IPM   (전방 {cfg.bev.x_range_m} m, 좌우 {cfg.bev.y_range_m} m, {cfg.bev.resolution_m*1000:.0f} mm/px)")',
-     'print(f"BEV 크기 {bev_sim.shape[1]} x {bev_sim.shape[0]} px, 카메라가 보는 비율 {vis_mask.mean()*100:.0f} %")',
-     '',
-     '# 왕복 오차. 카메라 뷰의 테이프 픽셀을 지면으로 되돌리면 원래 테이프에서 얼마나 벗어나나',
-     'vs, us = np.where(np.all(img_raw == cfg.lane.color_tape, axis=-1))',
-     'g = camera.project(H_i2g, np.column_stack([us, vs]).astype(float))',
-     'qv = render.to_vehicle(pose, trk.quads).reshape(-1, 2)',
-     'd = np.sqrt(((g[:, None, :] - qv[None, ::4, :]) ** 2).sum(-1)).min(1)',
-     'print(f"IPM 왕복 오차: 중앙값 {np.median(d)*100:.1f} cm, 95% {np.percentile(d, 95)*100:.1f} cm")')
+md('''
+### 테스트 (선택)
+2~3분. 처음 한 번, 코드 pull 받은 뒤 한 번.
+''')
+code('''
+!python -m pytest camsim/tests -q
+''')
 
-# --------------------------------------------------------------------------- 2. GT와 데이터
-md("## 2. 정답(GT)과 데이터셋",
-   "**주행하면서 데이터를 모으지 않는다.** 주행 가능 영역에 pose 를 무작위로 뿌리고, 각 자리에서 BEV 를 그리고,",
-   "기준선을 따라 전방 호길이로 waypoint 를 뽑는다. 그래서 \"차선 이탈 직전\" 같은 상황도 데이터에 자연히 들어가고,",
-   "모델은 복귀 동작을 따로 라벨링하지 않아도 배운다.",
-   "",
-   "**정답 경로 기준** (`cfg.waypoints.line`)",
-   "- `center` — 좌우 테이프의 중간선. 실차에서 HSV+IPM 으로 자동 라벨링할 때와 같은 기준이라 그대로 넘어간다.",
-   "- `racing` — CSV 의 레이싱 라인. 코너 안쪽을 파고들어 랩타임이 짧지만, 실차 라벨을 같은 기준으로 만들려면",
-   "  트랙마다 따로 최적화해야 한다.",
-   "",
-   "두 기준으로 각각 학습해서 4장에서 랩타임과 완주 안정성을 비교해 보라. 기준을 바꾸면 2장이 데이터를 다시 만든다.",
-   "아래는 왼쪽부터 참고용 카메라 뷰 / 모델이 보는 BEV / 차 주변 top-down 이다.")
-code('rng = np.random.default_rng(0)',
-     'poses = []',
-     'for n in range(4):',
-     '    bev, wp_s, p, cam = dataset.make_sample(trk, cfg, rng, with_camera=True, mask=vis_mask)',
-     '    poses.append(p)',
-     '    render.draw_points(cam, wp_s, H_g2i); render.draw_points_bev(bev, wp_s, cfg)',
-     '    show(viz.side_by_side(cam, bev, viz.local_view(p, trk, wp_s, cfg, mapimg)), width=1000, title=f"샘플 {n}: 카메라 뷰(참고) | BEV 모델 입력 | 위치")',
-     'overview, off = viz.draw_track_on_map(mapimg, trk, cfg)',
-     'show(viz.mark_poses_on_map(overview, off, mapimg, poses), width=600, title="샘플들의 위치")')
+code('''
+import os, sys, json, time, subprocess, numpy as np, cv2, torch, pandas as pd
+import matplotlib.pyplot as plt
+from IPython.display import Image, Video, display, clear_output
+os.chdir("/content/f1tenth_gym")
+from camsim import config, camera, track, render, gt, augment, dataset, model, train, closed_loop, viz, handoff
 
-md("### 데이터셋 저장",
-   "`out/dataset/images/NNNNNN.png` (BEV) 와 `labels.csv` (pose, waypoint) 로 저장한다.",
-   "증강은 저장하지 않고 학습 로딩 때 함수 하나(`augment_fn`)로 넣는다. 그래야 같은 데이터로 증강만 바꿔 가며 비교할 수 있다.",
-   "20,000장이면 코랩 CPU 로 몇 분, 디스크 350 MB 정도다. 드라이브가 아니라 **코랩 로컬 디스크**에 만들어야 한다.",
-   "",
-   "실차에서도 IPM 으로 만든 BEV 를 같은 포맷으로 저장하면 아래 코드가 그대로 돈다.")
-code('labels_path = f"{DATA_DIR}/labels.csv"',
-     'if dataset.needs_regeneration(DATA_DIR, cfg):      # 없거나, 다른 설정으로 만든 데이터면',
-     '    print("데이터 생성")',
-     '    t0 = time.time()',
-     '    dataset.generate_dataset(trk, cfg, N_DATASET, DATA_DIR, seed=0, log_every=5000)',
-     '    print(f"{N_DATASET}장 생성, {time.time() - t0:.0f}s")',
-     'else:',
-     '    print(f"{DATA_DIR} 재사용 (같은 설정으로 만든 데이터)")',
-     'files, ds_poses, ds_wps = dataset.read_labels(DATA_DIR)',
-     'print(f"데이터 {len(files)}장")',
-     'display(pd.read_csv(labels_path).head())')
+plt.rcParams["axes.unicode_minus"] = False       # 코랩 기본 폰트에 한글 없음. 그래프 글자는 영어로
+os.makedirs("out", exist_ok=True)
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+print("device:", DEVICE)
+if DEVICE == "cpu": print("GPU 없음. 런타임 > 런타임 유형 변경 > T4 GPU 로 바꾸고 처음부터 다시 돌릴 것")
 
-md("### 데이터 훑어보기",
-   "저장된 BEV 에 라벨(초록)을 찍어 본다. 라벨이 테이프 사이 한가운데를 따라가는지,",
-   "횡 오프셋과 헤딩 분포가 의도한 범위인지 확인한다. 여기서 이상하면 학습을 아무리 돌려도 소용없다.")
-code('for i in np.random.default_rng(1).choice(len(files), 3, replace=False):',
-     '    im = cv2.imread(f"{DATA_DIR}/images/{files[i]}")',
-     '    show(render.draw_points_bev(im, ds_wps[i], cfg), width=360, title=f"{files[i]}  pose={np.round(ds_poses[i], 2)}")',
-     'lat = np.array([gt.lateral_error(trk, p[:2]) for p in ds_poses])',
-     'dth = np.rad2deg(np.angle(np.exp(1j * (ds_poses[:, 2] - trk.heading[[gt.nearest_index(trk, p[:2]) for p in ds_poses]]))))',
-     'fig, ax = plt.subplots(1, 2, figsize=(9, 3))',
-     'ax[0].hist(lat, 30); ax[0].set_xlabel("lateral offset from centerline (m)")',
-     'ax[1].hist(dth, 30); ax[1].set_xlabel("heading error (deg)")',
-     'plt.tight_layout(); plt.show()')
+def show(img_bgr, width=640, title=None):
+    if title: print(title)
+    display(Image(data=cv2.imencode(".png", img_bgr)[1].tobytes(), width=width))
+''')
 
-# --------------------------------------------------------------------------- 3. 학습
-md("## 3. 학습",
-   "파라미터 38만 개짜리 작은 CNN 이 BEV 를 받아 waypoint 하나의 (x, y) 좌표(m)를 낸다. 손실은 Huber 다.",
-   "BEV 해상도(`cfg.bev.resolution_m`)를 낮추면 학습이 빨라진다.",
-   "",
-   "train/val 은 9:1 로 나눈다. **train loss 만 내려가고 val loss 가 멈추면 오버피팅**이다. 스텝과 장 수를 바꿔 비교해 보라.",
-   "연한 선이 원 값, 진한 선이 5점 이동평균이다. val 은 매번 약 1,000장으로 재는데도 좀 흔들리는데,",
-   "그건 샘플마다 난이도가 달라서다 (예: pitch 지터로 먼 테이프가 잘린 것).")
-code('AUGMENT_FN = None        # plain 학습. 과제에서 my_augment 로 바꿔 재학습한다',
-     'ds_train = dataset.DiskDataset(DATA_DIR, cfg, "train", val_frac=0.1, augment_fn=AUGMENT_FN)',
-     'ds_val = dataset.DiskDataset(DATA_DIR, cfg, "val", val_frac=0.1)',
-     'print(f"train {len(ds_train)}장, val {len(ds_val)}장, device {DEVICE}")',
-     '',
-     'def smooth(y, k=5):',
-     '    """이동평균. 양끝은 있는 만큼만 평균낸다."""',
-     '    return np.array([y[max(0, i - k + 1):i + 1].mean() for i in range(len(y))])',
-     '',
-     'def live_plot(history):',
-     '    clear_output(wait=True)',
-     '    st = [h["step"] for h in history]',
-     '    plt.figure(figsize=(7, 3.5))',
-     '    tr = np.array([h["loss"] for h in history])',
-     '    plt.plot(st, tr, color="C0", alpha=.35); plt.plot(st, smooth(tr), color="C0", label="train (smoothed)")',
-     '    if "val_loss" in history[-1]:',
-     '        va = np.array([h["val_loss"] for h in history])',
-     '        plt.plot(st, va, color="C1", alpha=.35); plt.plot(st, smooth(va), color="C1", label="val (smoothed)")',
-     '    plt.yscale("log"); plt.xlabel("step"); plt.ylabel("Huber loss"); plt.grid(alpha=.3); plt.legend()',
-     '    plt.title(f"step {st[-1]}  train {history[-1][\'loss\']:.4f}" + (f"  val {history[-1][\'val_loss\']:.4f}" if "val_loss" in history[-1] else ""))',
-     '    plt.show()',
-     '',
-     'net, hist = train.train(trk, cfg, steps=STEPS, batch_size=BATCH, lr=LR, device=DEVICE, out_path="model.pt",',
-     '                        num_workers=2 if DEVICE == "cuda" else 0, log_every=max(STEPS // 30, 1),',
-     '                        dataset=ds_train, val_dataset=ds_val, val_batches=32, callback=live_plot)',
-     'print("model.pt 저장")')
+md('''
+### 파라미터
+`camsim/config.yaml` 이 기본값이고 이 셀이 그 위에 덮어씀. **값을 바꿨으면 이 셀부터 다시 실행** (여기서 `cfg` 를 새로 만듦).
+어디까지 다시 돌릴지는 뭘 바꿨느냐에 달림:
 
-md("### 오차",
-   "예측점과 정답점 사이 거리(cm)다. 테이프 폭이 5 cm 니까 대부분 그 안에 들어오면 충분하다.",
-   "히스토그램 둘(저장된 val 이미지 / 새로 뽑은 pose)이 겹쳐야 정상이다.")
-code('pred = model.Predictor(net, cfg, DEVICE)',
-     'r_val = train.evaluate_dataset(pred, ds_val, n=300)',
-     'r_new = train.evaluate(pred, trk, cfg, n=300)',
-     'print(f"val (저장 이미지 {r_val[\'n\']}장): 평균 {r_val[\'mean_m\']*100:.1f} cm, 최대 {r_val[\'max_m\']*100:.1f} cm")',
-     'print(f"새 pose {r_new[\'n\']}개:           평균 {r_new[\'mean_m\']*100:.1f} cm, 최대 {r_new[\'max_m\']*100:.1f} cm")',
-     'plt.figure(figsize=(7, 3.5))',
-     'plt.hist(r_val["errs_m"] * 100, 30, alpha=.6, label="val, saved images")',
-     'plt.hist(r_new["errs_m"] * 100, 30, alpha=.6, label="fresh poses")',
-     'plt.axvline(cfg.lane.tape_width_m * 100, color="r", ls="--", label="tape width")',
-     'plt.xlabel("waypoint error (cm)"); plt.ylabel("count"); plt.legend(); plt.grid(alpha=.3); plt.show()',
-     '',
-     'bev, wp_s, p, cam = dataset.make_sample(trk, cfg, np.random.default_rng(7), with_camera=True, mask=vis_mask)',
-     'wp_pred = pred.predict(bev)',
-     'render.draw_points_bev(bev, wp_s, cfg, (0, 255, 0)); render.draw_points_bev(bev, wp_pred, cfg, (255, 0, 255))',
-     'render.draw_points(cam, wp_s, H_g2i, (0, 255, 0)); render.draw_points(cam, wp_pred, H_g2i, (255, 0, 255))',
-     'show(viz.side_by_side(cam, bev), width=900, title="초록 = 정답, 자홍 = 모델 예측  (왼쪽은 참고용, 모델은 오른쪽 BEV 만 본다)")')
+| 바꾼 것 | 다시 실행 |
+|---|---|
+| `STEPS`, `BATCH`, `LR`, `AUGMENT_FN` | 이 셀 → 3장 |
+| `speed_mps`, `LATENCIES`, `SIGMAS` | 이 셀 → 4장 |
+| 카메라, 테이프 배치, `waypoints.line`, `ahead_m`, `sampling.*` | 이 셀 → 2장(설정 바뀐 걸 알아채고 데이터 다시 만듦) → 3장 → 4장 |
+''')
+code('''
+cfg = config.load()
 
-md("### sim-to-real 갭: plain 모델은 실차에서 무너진다",
-   "위 모델은 깨끗한 시뮬 BEV 에서만 잘 맞는다. 실차 IPM 출력에는 시뮬에 없는 것들이 섞인다.",
-   "",
-   "| 실차에서 생기는 일 | BEV 에 나타나는 모양 | 함수 |",
-   "|---|---|---|",
-   "| 가감속 때 차체 pitch 변화 (서스펜션) | IPM 평면 가정이 깨져 먼 곳이 휨 | `jitter_bev` (기하학적으로 정확) |",
-   "| IPM 원거리 해상도 저하 | 먼 테이프가 뭉개짐 (1장 오른쪽 그림) | `ipm_blur` |",
-   "| 테이프 마모·벗겨짐, 다른 차의 가림 | 테이프 일부가 사라짐 | `erase_patches` |",
-   "| 조도 변화, 노출 변동 | 전체가 밝거나 어두워짐 | `brightness_contrast`, `gamma` |",
-   "| 조명 색온도 (형광등/자연광) | 테이프 색조가 달라짐 | `hsv_shift` |",
-   "| 천장 조명이 한쪽만 밝음 | 화면을 가로지르는 밝기 기울기 | `illumination` |",
-   "| 구조물·사람 그림자 | 일부 영역이 어두워짐 | `shadow` |",
-   "| 게인을 올린 센서, 초점 흐림 | 노이즈, 블러 | `noise`, `blur` |",
-   "| `image_transport` compressed | JPEG 블록 아티팩트 | `jpeg` |",
-   "| 캘리브레이션 오차 | BEV 전체가 살짝 기울거나 늘어남 | (직접 작성) |",
-   "",
-   "실차 데이터가 없어도 확인할 수 있다. 같은 모델을 **열화된 BEV** 로 평가해서 오차가 얼마나 튀는지 보라.")
-code('degradations = {',
-     '    "clean": None,',
-     '    "pitch jitter": lambda b, r: augment.jitter_bev(b, cfg, r),',
-     '    "ipm blur (far)": lambda b, r: augment.ipm_blur(b, cfg, r),',
-     '    "tape erased": lambda b, r: augment.erase_patches(b, cfg, r),',
-     '    "lighting": lambda b, r: augment.gamma(augment.brightness_contrast(augment.illumination(b, cfg, r), cfg, r), cfg, r),',
-     '    "shadow": lambda b, r: augment.shadow(b, cfg, r),',
-     '    "sensor (blur+noise+jpeg)": lambda b, r: augment.jpeg(augment.noise(augment.blur(b, cfg, r), cfg, r), cfg, r),',
-     '    "all (example_augment)": lambda b, r: augment.example_augment(b, cfg, r),',
-     '}',
-     'rows = {k: train.evaluate(pred, trk, cfg, n=100 if SMOKE else 200, degrade_fn=f) for k, f in degradations.items()}',
-     'tbl = pd.DataFrame({"mean (cm)": {k: r["mean_m"] * 100 for k, r in rows.items()},',
-     '                    "max (cm)": {k: r["max_m"] * 100 for k, r in rows.items()}}).round(1)',
-     'print("열화 종류별 waypoint 오차. clean 대비 얼마나 나빠지는가:")',
-     'display(tbl)',
-     '',
-     '# 각 열화가 BEV 를 실제로 어떻게 바꾸는지도 눈으로 본다',
-     'base = dataset.make_sample(trk, cfg, np.random.default_rng(3), mask=vis_mask)[0]',
-     'tiles = [base] + [f(base, np.random.default_rng(2)) for k, f in degradations.items() if f]',
-     'names = ["clean"] + [k for k, f in degradations.items() if f]',
-     'for i in range(0, len(tiles), 4):',
-     '    show(viz.side_by_side(*tiles[i:i + 4]), width=1000, title=" | ".join(names[i:i + 4]))')
+# ---- 1장: 카메라와 트랙 ----
+cfg.camera.height_m   = 0.20      # 바닥에서 렌즈 중심까지 (m). 마운트 확정 전 가정값
+cfg.camera.pitch_deg  = 0.0       # 아래로 숙인 각도 (+ = 아래). 정면이면 0
+cfg.camera.hfov_deg   = 90.0      # 렌즈 수평 화각
+cfg.lane.follow_walls  = True     # True 면 맵 벽 안쪽을 따라 테이프 놓음 (폭이 구간마다 다름)
+cfg.lane.wall_margin_m = 0.25     # 벽에서 얼마나 안쪽에 놓을지
+cfg.lane.track_width_m = 0.8      # follow_walls = False 일 때 좌우 테이프 간격
+cfg.lane.color_floor  = [128, 128, 128]   # BGR. 회색 바닥
+cfg.lane.color_tape   = [0, 220, 255]     # BGR. 노란 테이프
 
-md("### 과제: sim-to-real 증강 설계",
-   "`my_augment(bev, rng)` 를 써서 위 표의 열화들(그리고 표에 없는 실차 현상)에 강한 모델을 만든다.",
-   "",
-   "1. 입력과 출력은 같은 크기의 BEV (BGR uint8). 라벨은 바뀌지 않으므로 **정답을 옮기는 변형(이동·회전)은 금지**다.",
-   "   정답을 유지하는 관측 변화만 허용된다.",
-   "2. 아래 셀의 `AUGMENT_FN = my_augment` 로 두고 3장 첫 셀부터 다시 실행해 재학습한다.",
-   "3. 위 열화 표를 다시 뽑아 plain 모델과 비교하고, 4장 폐루프에서 완주 여부와 횡오차를 비교한다.",
-   "4. 어떤 열화가 폐루프 실패로 이어지는지, 어떤 증강이 그걸 막았는지 한 문단으로 정리한다.",
-   "",
-   "`camsim/augment.py` 함수를 조합해도 되고 OpenCV 로 직접 써도 된다. 증강을 과하게 넣으면 clean 성능이 깎이니 표로 확인할 것.",
-   "그리고 `jitter_bev` 를 뺀 나머지는 실제 카메라 물리를 대충 근사한 것이다.",
-   "실차 영상을 찍고 나면 실제로 뭐가 깨지는지 보고 다시 설계하는 게 맞다.")
-code('def my_augment(bev, rng):',
-     '    """여기를 채운다. 주석을 풀어 써도 되고 직접 OpenCV 로 짜도 된다. 세기는 파라미터 셀의 cfg.augment.* 에서 온다."""',
-     '    out = bev',
-     '    # --- 기하 (라벨은 그대로 두고 관측만 바꾼다) ---',
-     '    # out = augment.jitter_bev(out, cfg, rng)          # pitch 변화 -> BEV 휨',
-     '    # out = augment.ipm_blur(out, cfg, rng)            # 먼 곳일수록 뭉개짐',
-     '    # out = augment.erase_patches(out, cfg, rng)       # 테이프 마모·가림',
-     '    # --- 조명 ---',
-     '    # out = augment.illumination(out, cfg, rng)        # 불균일 조명',
-     '    # out = augment.shadow(out, cfg, rng)              # 그림자',
-     '    # out = augment.brightness_contrast(out, cfg, rng) # 노출',
-     '    # out = augment.gamma(out, cfg, rng)               # 감마',
-     '    # out = augment.hsv_shift(out, cfg, rng)           # 색온도',
-     '    # --- 센서 ---',
-     '    # out = augment.blur(out, cfg, rng)',
-     '    # out = augment.noise(out, cfg, rng)',
-     '    # out = augment.jpeg(out, cfg, rng)',
-     '    # --- 직접 만들어 보기 ---',
-     '    # out = cv2.GaussianBlur(out, (5, 5), 0)',
-     '    # out = cv2.LUT(out, np.clip((np.arange(256) / 255) ** 0.8 * 255, 0, 255).astype(np.uint8))',
-     '    return out',
-     '',
-     'AUGMENT_FN = my_augment      # 이렇게 두고 3장 첫 셀(ds_train)부터 다시 실행하면 증강 학습이 된다',
-     'sample_bev = dataset.make_sample(trk, cfg, np.random.default_rng(3), mask=vis_mask)[0]',
-     'show(viz.side_by_side(sample_bev, my_augment(sample_bev, np.random.default_rng(0))), width=600, title="my_augment 미리보기: 원본 | 증강")')
+# ---- 2장: GT 와 데이터 ----
+cfg.waypoints.line = "center"     # 정답 경로 기준. "center" = 좌우 테이프 중간선 (실차 라벨링과 같음)
+                                  #                "racing" = CSV 의 레이싱 라인 (코너 안쪽)
+cfg.waypoints.ahead_m = 1.0       # 예측할 waypoint 의 전방 거리 (m). 이 점이 곧 pure pursuit 목표점. 2 m 넘기지 말 것
+cfg.sampling.lateral_frac = 0.35  # 기준선에서 ±트랙폭*frac 범위에 pose 뿌림
+cfg.sampling.heading_deg  = 15.0  # 헤딩도 ± 이만큼
+N_DATASET = 20000                 # 저장할 장 수
+DATA_DIR = "out/dataset"
 
-# --------------------------------------------------------------------------- 4. 폐루프
-md("## 4. 폐루프 검증 (gym, ROS 없음)",
-   "제어 틱마다 BEV 렌더 → 모델 추론 → pure pursuit → `env.step` 을 돈다.",
-   "종료 조건은 실차 규칙과 같다. **차체 모서리가 테이프를 넘으면 실격**(`tape_crossed`), 한 바퀴 돌면 `lap`.",
-   "",
-   "코랩은 실시간이 아니라서 그냥 두면 지연이 0이 된다. 젯슨의 지연을 흉내내는 버퍼(`latency_steps`, 1틱 = 1/control_hz 초)를",
-   "꼭 넣어야 한다. 먼저 **오라클**(정답 waypoint + 가우시안 노이즈)로 \"인지 오차 σ와 지연이 얼마까지면 완주하는가\"를",
-   "표로 만든다. 이게 배포 게이트의 기준이 된다.")
-code('env = closed_loop.make_env(cfg)',
-     'rows = closed_loop.sweep(env, trk, cfg, H_g2i, latency_list=LATENCIES, sigma_list=SIGMAS)',
-     'df = pd.DataFrame(rows); json.dump(rows, open("out/sweep_oracle.json", "w"), indent=1)',
-     'print(f"기준 경로 {cfg.waypoints.line} (길이 {trk.length:.1f} m), 제어 주기 {cfg.closed_loop.control_hz} Hz, 속도 {cfg.closed_loop.speed_mps} m/s, waypoint {cfg.waypoints.ahead_m} m")',
-     'print("종료 이유 (lap = 완주, tape_crossed = 실격):")',
-     'display(df.pivot(index="latency_steps", columns="sigma", values="reason"))',
-     'print("평균 횡오차 (m):")',
-     'display(df.pivot(index="latency_steps", columns="sigma", values="mean_lateral_m").round(3))')
+# ---- 3장: 학습 ----
+STEPS, BATCH, LR = 3000, 32, 1e-3
 
-md("### 학습 모델로 주행",
-   "지연을 바꿔 가며 달리고 횡오차 곡선을 겹쳐 그린다.",
-   "영상은 지연 0 주행이고, 왼쪽이 카메라 뷰(참고), 오른쪽이 모델 입력 BEV, 초록이 모델이 낸 waypoint 다.")
-code('results = {}',
-     'plt.figure(figsize=(8, 3.5))',
-     'for lat in LATENCIES:',
-     '    r = closed_loop.run(env, pred, trk, cfg, H_g2i, latency_steps=lat, video_path="out/run_latency0.mp4" if lat == LATENCIES[0] else None)',
-     '    results[lat] = r',
-     '    t = np.arange(r.steps) / r.control_hz_eff',
-     '    plt.plot(t, r.lateral_trace * 100, label=f"latency {lat} ticks -> {r.reason} ({r.progress_m:.0f} m)")',
-     '    print(f"latency={lat:2d}: {r.reason:12s} 진행 {r.progress_m:6.1f} m  시간 {r.time_s:5.1f} s  횡오차 평균 {r.mean_lateral_m*100:5.1f} cm  최대 {r.max_lateral_m*100:5.1f} cm")',
-     'inner = (cfg.lane.track_width_m - cfg.lane.tape_width_m) / 2 - cfg.closed_loop.car_width_m / 2',
-     'plt.axhline(inner * 100, color="r", ls="--", label="body touches tape (straight)")',
-     'plt.xlabel("time (s)"); plt.ylabel("lateral error (cm)"); plt.legend(fontsize=8); plt.grid(alpha=.3); plt.show()',
-     'display(Video(viz.to_h264("out/run_latency0.mp4"), embed=True, width=900))   # mp4v 는 브라우저가 못 읽어서 H.264 로 변환')
+# 증강 세기. 기본 학습은 증강 없이(plain) 하고, 아래 값은 3장 sim-to-real 과제에서 씀
+cfg.augment.pitch_jitter_deg = 2.0    # 가감속 때 pitch 변해서 BEV 휘는 정도 (도)
+cfg.augment.ipm_blur_max_px = 9       # 먼 곳일수록 커지는 블러
+cfg.augment.tape_dropout_prob = 0.3   # 테이프 마모·가림
+cfg.augment.brightness_delta = 40     # 노출 변화
+cfg.augment.contrast_range = [0.8, 1.2]
+cfg.augment.gamma_range = [0.7, 1.5]
+cfg.augment.hue_shift_deg = 15        # 조명 색온도
+cfg.augment.sat_scale = [0.7, 1.3]
+cfg.augment.illum_strength = 0.3      # 불균일 조명
+cfg.augment.shadow_prob = 0.3
+cfg.augment.blur_max_px = 5
+cfg.augment.noise_sigma = 6
+cfg.augment.jpeg_quality = [40, 90]   # image_transport compressed 아티팩트
 
-md("### 맵 위의 주행 경로",
-   "검은 점선이 중심선(GT), 노란 선이 테이프, 회색 실선이 오라클 주행, 색 파선이 학습 모델 주행(지연별)이다.",
-   "빈 원이 출발, 채운 원이 종료 지점이고 실격이면 그 자리에서 끊긴다.",
-   "",
-   "163 m 트랙에서 경로 차이는 수 cm 라 실제 축척으로 그리면 전부 겹쳐 보인다.",
-   "그래서 **중심선 대비 편차만 `MAGNIFY` 배로 과장**해서 그린다. 실제 위치가 아니라는 점에 주의.",
-   "`MAGNIFY = 1` 로 두면 실제 축척이고, 아래 두 번째 그림(종료 지점 확대)은 원래부터 과장 없이 그린다.")
-code('MAGNIFY = 15      # 중심선 대비 편차를 몇 배로 과장할지. 1 = 실제 축척',
-     '',
-     'paths = {}',
-     'r_or = closed_loop.run(env, model.OraclePredictor(trk, cfg), trk, cfg, H_g2i, latency_steps=0)',
-     'paths[f"oracle -> {r_or.reason} ({r_or.progress_m:.0f} m)"] = r_or.pose_trace',
-     'for lat, r in results.items():',
-     '    paths[f"model latency {lat} -> {r.reason} ({r.progress_m:.0f} m, {r.time_s:.0f} s)"] = r.pose_trace',
-     'pm, _ = viz.draw_paths_on_map(mapimg, trk, cfg, paths, magnify=MAGNIFY)',
-     'show(pm, width=900, title="전체 맵: 경로 비교")',
-     '',
-     'r0 = results[LATENCIES[0]]',
-     'plain, off = viz.draw_paths_on_map(mapimg, trk, cfg, paths, legend=False)      # 확대용은 실제 축척으로',
-     'show(viz.crop_around(plain, off, mapimg, r0.pose_trace[-1], half_m=3.0, scale=3), width=500, title=f"지연 {LATENCIES[0]} 주행의 종료 지점 ({r0.reason}) — 실제 축척")')
+# ---- 4장: 폐루프 ----
+cfg.closed_loop.speed_mps = 2.0
+cfg.closed_loop.max_steps = 4000
+LATENCIES = [0, 2, 4, 6]              # 제어 틱 단위 지연 (1틱 = 1/control_hz 초)
+SIGMAS = [0.0, 0.05, 0.1, 0.2]        # 인지 노이즈 σ (m)
 
-# --------------------------------------------------------------------------- 5. 보관
-md("## 5. 결과 보관",
-   "여기까지 만든 파일은 코랩 VM 에 있고 런타임이 끊기면 사라진다. 아래 셀이 `model.pt` 를 Drive 에 복사하고",
-   "복사본의 SHA-256 을 확인한다. `checkpoint.json` 에 실행 설정과 Git 커밋도 기록한다.",
-   "데이터셋 보관이 필요하면 `SAVE_DATASET = True` 로 바꾼다. 2만 개 파일은 zip 으로 묶어 옮긴다.",
-   "",
-   "Jetson 에서는 Drive 의 `model.pt` 파일만 ‘링크가 있는 모든 사용자’에게 읽기 권한을 준 다음",
-   "공유 링크를 복사한다. `camsim/README.md` 의 `gdown` 명령에 그 링크와 아래 SHA-256 을 넣는다.",
-   "여기서 Jetson 추론 환경은 설치하거나 실행하지 않는다.")
-code('from pathlib import Path',
-     'import shutil',
-     '',
-     'SAVE_DATASET = False    # 데이터셋 zip 까지 보관하려면 True',
-     'checkpoint = Path("model.pt")',
-     'if not checkpoint.is_file(): raise FileNotFoundError("model.pt 가 없습니다. 3장 학습 셀을 먼저 실행하세요.")',
-     '',
-     'from google.colab import drive',
-     'drive.mount("/content/drive")',
-     'dst = Path("/content/drive/MyDrive/camsim_results")',
-     'git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()',
-     'manifest = handoff.export_checkpoint(checkpoint, dst, cfg, git_commit)',
-     'for name in ("sweep_oracle.json", "run_latency0.mp4"):',
-     '    src = Path("out") / name',
-     '    if src.is_file(): shutil.copy2(src, dst / name)',
-     'if SAVE_DATASET:',
-     '    archive = shutil.make_archive("out/dataset", "zip", root_dir="out", base_dir="dataset")',
-     '    shutil.copy2(archive, dst / "dataset.zip")',
-     'print("Drive 저장:", dst / checkpoint.name)',
-     'print("SHA-256:", manifest["sha256"])',
-     'print("Git commit:", git_commit)',
-     'print("Drive 에서 model.pt 공유 링크를 복사해 Jetson 의 gdown 명령에 사용하세요.")')
+trk = track.from_csv(cfg.closed_loop.centerline_csv, cfg)
+H_g2i, H_i2g = camera.build(cfg)
+print(f"트랙 길이 {trk.length:.1f} m, 테이프 사각형 {len(trk.quads)}개, 초점거리 {camera.focal_px(cfg):.0f} px")
+''')
+
+# =========================================================================== 1. 카메라와 트랙
+md('''
+## 1. 카메라와 트랙
+지면(z=0)과 이미지 사이는 homography `H` 하나로 닫힘. 실차 IPM 에서 구하는 `H_i2g` 의 역행렬이 곧 합성 카메라.
+높이 0.2 m 에 정면(pitch 0)으로 달면 지평선이 이미지 세로 한가운데 옴. `pitch_deg` 와 `height_m` 을 바꿔
+다시 실행하면 지평선이 어디로 가는지, 가까운 바닥이 어디부터 보이는지 확인 가능.
+''')
+code('''
+horizon_v = camera.project(H_g2i, np.array([[1000.0, 0.0]]))[0, 1]
+near_x = camera.project(H_i2g, np.array([[cfg.camera.image_width / 2, cfg.camera.image_height]]))[0, 0]
+print(f"지평선 행 v = {horizon_v:.0f} px (이미지 높이 {cfg.camera.image_height}), 가장 가까운 보이는 바닥 = {near_x:.2f} m")
+
+i = 50
+pose = np.array([*trk.center[i], trk.heading[i]])
+wp = gt.waypoint_ahead(pose, trk, cfg)
+img_raw = render.render(pose, trk.quads, None, H_g2i, cfg)      # 순수 카메라 뷰. 아래 IPM 비교에 씀
+show(render.draw_points(img_raw.copy(), wp, H_g2i), title="합성 카메라 뷰 (초록 = GT waypoint). 모델은 이걸 안 보고, 이걸 펴서 만든 BEV 를 봄")
+''')
+
+md('''
+### 트랙 어디인가
+차 주변을 위에서 본 그림. 검은 띠 = gym 맵의 벽, 하늘색 부채꼴 = 카메라 화각, 보라 사각형 = BEV 범위, 초록 = GT waypoint.
+
+실차 트랙엔 벽이 없고 테이프가 경계. 벽은 gym 충돌과 LiDAR 에만 쓰이고 카메라 모델은 테이프만 봄.
+`follow_walls = True` 면 테이프를 맵 벽 안쪽 `wall_margin_m` 지점에 놓아서 트랙 모양이 맵과 같아짐 (대신 폭이 구간마다 다름).
+`False` 면 중심선에서 `track_width_m/2` 로 일정하게 놓음 (실습실 테이프 트랙 방식).
+''')
+code('''
+mapimg = viz.MapImage(cfg.closed_loop.map_yaml)
+show(viz.local_view(pose, trk, wp, cfg, mapimg), width=500, title="차 주변 top-down (위 = 차량 전방)")
+overview, off = viz.draw_track_on_map(mapimg, trk, cfg)
+viz.mark_poses_on_map(overview, off, mapimg, [pose])
+show(overview, width=600, title="전체 맵에서의 위치")
+''')
+
+md('''
+### BEV 세 장: 정답 / 시뮬 모델 입력 / 실차 IPM
+왼쪽은 지오메트리에서 바로 그린 top-down 이라 참값.
+가운데는 거기에 **카메라 가시 마스크**를 씌운 것. 카메라가 못 보는 코앞과 화각 밖을 바닥색으로 덮음. 이게 **시뮬 학습 데이터**.
+오른쪽은 위 카메라 뷰를 `H_i2g` 로 편 것, 즉 실차 IPM 이 만들어 낼 BEV.
+
+**가운데와 오른쪽이 같은 모양이어야** 시뮬에서 학습한 가중치가 실차로 넘어감.
+멀어질수록 오른쪽이 늘어지고 끊기는데 그게 IPM 해상도 한계. 이 카메라(높이 0.2 m)로는 1.5 m 까지 테이프 위치가
+0.3 cm 안에서 복구되고, 2 m 넘으면 코너에서 10 cm 씩 튐. waypoint 를 1 m 에 두는 이유.
+''')
+code('''
+vis_mask = render.bev_visibility_mask(H_g2i, cfg)
+bev_true = render.render_bev(pose, trk.quads, cfg)
+bev_sim = render.render_bev(pose, trk.quads, cfg, vis_mask)      # 모델 입력
+bev_ipm = render.ipm_bev(img_raw, H_i2g, cfg)
+show(viz.side_by_side(bev_true, bev_sim, bev_ipm), width=900, title=f"정답 | 시뮬 모델 입력 | 실차 IPM   (전방 {cfg.bev.x_range_m} m, 좌우 {cfg.bev.y_range_m} m, {cfg.bev.resolution_m*1000:.0f} mm/px)")
+print(f"BEV 크기 {bev_sim.shape[1]} x {bev_sim.shape[0]} px, 카메라가 보는 비율 {vis_mask.mean()*100:.0f} %")
+
+# 왕복 오차. 카메라 뷰의 테이프 픽셀을 지면으로 되돌리면 원래 테이프에서 얼마나 벗어나나
+vs, us = np.where(np.all(img_raw == cfg.lane.color_tape, axis=-1))
+g = camera.project(H_i2g, np.column_stack([us, vs]).astype(float))
+qv = render.to_vehicle(pose, trk.quads).reshape(-1, 2)
+d = np.sqrt(((g[:, None, :] - qv[None, ::4, :]) ** 2).sum(-1)).min(1)
+print(f"IPM 왕복 오차: 중앙값 {np.median(d)*100:.1f} cm, 95% {np.percentile(d, 95)*100:.1f} cm")
+''')
+
+# =========================================================================== 2. GT와 데이터
+md('''
+## 2. 정답(GT)과 데이터셋
+**주행하면서 데이터를 모으지 않음.** 주행 가능 영역에 pose 를 무작위로 뿌리고, 각 자리에서 BEV 를 그리고,
+기준선을 따라 전방 호길이로 waypoint 를 뽑음. 그래서 "차선 이탈 직전" 같은 상황도 데이터에 자연히 들어가고,
+모델은 복귀 동작을 따로 라벨링하지 않아도 배움.
+
+**정답 경로 기준** (`cfg.waypoints.line`)
+- `center` — 좌우 테이프의 중간선. 실차에서 HSV+IPM 으로 자동 라벨링할 때와 같은 기준이라 그대로 넘어감.
+- `racing` — CSV 의 레이싱 라인. 코너 안쪽을 파고들어 랩타임이 짧지만, 실차 라벨을 같은 기준으로 만들려면
+  트랙마다 따로 최적화해야 함.
+
+두 기준으로 각각 학습해서 4장에서 랩타임과 완주 안정성을 비교해 볼 것. 기준을 바꾸면 2장이 데이터를 다시 만듦.
+아래는 왼쪽부터 참고용 카메라 뷰 / 모델이 보는 BEV / 차 주변 top-down.
+''')
+code('''
+rng = np.random.default_rng(0)
+poses = []
+for n in range(4):
+    bev, wp_s, p, cam = dataset.make_sample(trk, cfg, rng, with_camera=True, mask=vis_mask)
+    poses.append(p)
+    render.draw_points(cam, wp_s, H_g2i); render.draw_points_bev(bev, wp_s, cfg)
+    show(viz.side_by_side(cam, bev, viz.local_view(p, trk, wp_s, cfg, mapimg)), width=1000, title=f"샘플 {n}: 카메라 뷰(참고) | BEV 모델 입력 | 위치")
+overview, off = viz.draw_track_on_map(mapimg, trk, cfg)
+show(viz.mark_poses_on_map(overview, off, mapimg, poses), width=600, title="샘플들의 위치")
+''')
+
+md('''
+### 데이터셋 저장
+`out/dataset/images/NNNNNN.png` (BEV) 와 `labels.csv` (pose, waypoint) 로 저장. 증강은 저장 안 하고 학습 로딩 때
+함수 하나(`augment_fn`)로 넣음. 같은 데이터로 증강만 바꿔 가며 비교하려고.
+20,000장이면 코랩 CPU 로 몇 분, 디스크 350 MB 정도. 드라이브 말고 **코랩 로컬 디스크**에 만들 것.
+같이 저장되는 `spec.json` 덕에 설정이 바뀌면 다음 실행 때 알아서 다시 만듦.
+
+실차에서도 IPM 으로 만든 BEV 를 같은 포맷으로 저장하면 아래 코드가 그대로 돎.
+''')
+code('''
+if dataset.needs_regeneration(DATA_DIR, cfg):      # 없거나, 다른 설정으로 만든 데이터면
+    t0 = time.time()
+    dataset.generate_dataset(trk, cfg, N_DATASET, DATA_DIR, seed=0, log_every=5000)
+    print(f"{N_DATASET}장 생성, {time.time() - t0:.0f}s")
+else:
+    print(f"{DATA_DIR} 재사용 (같은 설정으로 만든 데이터)")
+files, ds_poses, ds_wps = dataset.read_labels(DATA_DIR)
+print(f"데이터 {len(files)}장")
+display(pd.read_csv(f"{DATA_DIR}/labels.csv").head())
+''')
+
+md('''
+### 데이터 훑어보기
+저장된 BEV 에 라벨(초록)을 찍어 봄. 라벨이 테이프 사이 한가운데를 따라가는지, 횡 오프셋과 헤딩 분포가
+의도한 범위인지 확인. 여기서 이상하면 학습 아무리 돌려도 소용없음.
+''')
+code('''
+for i in np.random.default_rng(1).choice(len(files), 3, replace=False):
+    im = cv2.imread(f"{DATA_DIR}/images/{files[i]}")
+    show(render.draw_points_bev(im, ds_wps[i], cfg), width=360, title=f"{files[i]}  pose={np.round(ds_poses[i], 2)}")
+lat = np.array([gt.lateral_error(trk, p[:2]) for p in ds_poses])
+dth = np.rad2deg(np.angle(np.exp(1j * (ds_poses[:, 2] - trk.heading[[gt.nearest_index(trk, p[:2]) for p in ds_poses]]))))
+fig, ax = plt.subplots(1, 2, figsize=(9, 3))
+ax[0].hist(lat, 30); ax[0].set_xlabel("lateral offset from centerline (m)")
+ax[1].hist(dth, 30); ax[1].set_xlabel("heading error (deg)")
+plt.tight_layout(); plt.show()
+''')
+
+# =========================================================================== 3. 학습
+md('''
+## 3. 학습
+파라미터 38만 개짜리 작은 CNN 이 BEV 를 받아 waypoint 하나의 (x, y) 좌표(m)를 냄. 손실은 Huber.
+BEV 해상도(`cfg.bev.resolution_m`)를 낮추면 학습이 빨라짐.
+
+train/val 은 9:1. **train loss 만 내려가고 val loss 가 멈추면 오버피팅.** 스텝과 장 수를 바꿔 비교해 볼 것.
+연한 선이 원 값, 진한 선이 5점 이동평균. val 은 매번 약 1,000장으로 재는데도 좀 흔들림 — 샘플마다 난이도가 달라서
+(예: pitch 지터로 먼 테이프가 잘린 것).
+''')
+code('''
+AUGMENT_FN = None        # plain 학습. 과제에서 my_augment 로 바꿔 재학습
+ds_train = dataset.DiskDataset(DATA_DIR, cfg, "train", val_frac=0.1, augment_fn=AUGMENT_FN)
+ds_val = dataset.DiskDataset(DATA_DIR, cfg, "val", val_frac=0.1)
+print(f"train {len(ds_train)}장, val {len(ds_val)}장, device {DEVICE}")
+
+def smooth(y, k=5):      # 이동평균. 양끝은 있는 만큼만
+    return np.array([y[max(0, i - k + 1):i + 1].mean() for i in range(len(y))])
+
+def live_plot(history):
+    clear_output(wait=True)
+    st = [h["step"] for h in history]
+    plt.figure(figsize=(7, 3.5))
+    tr = np.array([h["loss"] for h in history])
+    plt.plot(st, tr, color="C0", alpha=.35); plt.plot(st, smooth(tr), color="C0", label="train (smoothed)")
+    if "val_loss" in history[-1]:
+        va = np.array([h["val_loss"] for h in history])
+        plt.plot(st, va, color="C1", alpha=.35); plt.plot(st, smooth(va), color="C1", label="val (smoothed)")
+    plt.yscale("log"); plt.xlabel("step"); plt.ylabel("Huber loss"); plt.grid(alpha=.3); plt.legend()
+    plt.title(f"step {st[-1]}  train {history[-1]['loss']:.4f}" + (f"  val {history[-1]['val_loss']:.4f}" if "val_loss" in history[-1] else ""))
+    plt.show()
+
+net, hist = train.train(trk, cfg, steps=STEPS, batch_size=BATCH, lr=LR, device=DEVICE, out_path="model.pt",
+                        num_workers=2 if DEVICE == "cuda" else 0, log_every=max(STEPS // 30, 1),
+                        dataset=ds_train, val_dataset=ds_val, val_batches=32, callback=live_plot)
+print("model.pt 저장")
+''')
+
+md('''
+### 오차
+예측점과 정답점 사이 거리(cm). 테이프 폭이 5 cm 니까 대부분 그 안에 들어오면 충분함.
+히스토그램 둘(저장된 val 이미지 / 새로 뽑은 pose)이 겹쳐야 정상.
+''')
+code('''
+pred = model.Predictor(net, cfg, DEVICE)
+r_val = train.evaluate_dataset(pred, ds_val, n=300)
+r_new = train.evaluate(pred, trk, cfg, n=300)
+print(f"val (저장 이미지 {r_val['n']}장): 평균 {r_val['mean_m']*100:.1f} cm, 최대 {r_val['max_m']*100:.1f} cm")
+print(f"새 pose {r_new['n']}개:           평균 {r_new['mean_m']*100:.1f} cm, 최대 {r_new['max_m']*100:.1f} cm")
+plt.figure(figsize=(7, 3.5))
+plt.hist(r_val["errs_m"] * 100, 30, alpha=.6, label="val, saved images")
+plt.hist(r_new["errs_m"] * 100, 30, alpha=.6, label="fresh poses")
+plt.axvline(cfg.lane.tape_width_m * 100, color="r", ls="--", label="tape width")
+plt.xlabel("waypoint error (cm)"); plt.ylabel("count"); plt.legend(); plt.grid(alpha=.3); plt.show()
+
+bev, wp_s, p, cam = dataset.make_sample(trk, cfg, np.random.default_rng(7), with_camera=True, mask=vis_mask)
+wp_pred = pred.predict(bev)
+render.draw_points_bev(bev, wp_s, cfg, (0, 255, 0)); render.draw_points_bev(bev, wp_pred, cfg, (255, 0, 255))
+render.draw_points(cam, wp_s, H_g2i, (0, 255, 0)); render.draw_points(cam, wp_pred, H_g2i, (255, 0, 255))
+show(viz.side_by_side(cam, bev), width=900, title="초록 = 정답, 자홍 = 모델 예측  (왼쪽은 참고용, 모델은 오른쪽 BEV 만 봄)")
+''')
+
+md('''
+### sim-to-real 갭: plain 모델은 실차에서 무너짐
+위 모델은 깨끗한 시뮬 BEV 에서만 잘 맞음. 실차 IPM 출력엔 시뮬에 없는 것들이 섞임.
+
+| 실차에서 생기는 일 | BEV 에 나타나는 모양 | 함수 |
+|---|---|---|
+| 가감속 때 차체 pitch 변화 (서스펜션) | IPM 평면 가정이 깨져 먼 곳이 휨 | `jitter_bev` (기하학적으로 정확) |
+| IPM 원거리 해상도 저하 | 먼 테이프가 뭉개짐 (1장 오른쪽 그림) | `ipm_blur` |
+| 테이프 마모·벗겨짐, 다른 차의 가림 | 테이프 일부가 사라짐 | `erase_patches` |
+| 조도 변화, 노출 변동 | 전체가 밝거나 어두워짐 | `brightness_contrast`, `gamma` |
+| 조명 색온도 (형광등/자연광) | 테이프 색조가 달라짐 | `hsv_shift` |
+| 천장 조명이 한쪽만 밝음 | 화면을 가로지르는 밝기 기울기 | `illumination` |
+| 구조물·사람 그림자 | 일부 영역이 어두워짐 | `shadow` |
+| 게인 올린 센서, 초점 흐림 | 노이즈, 블러 | `noise`, `blur` |
+| `image_transport` compressed | JPEG 블록 아티팩트 | `jpeg` |
+| 캘리브레이션 오차 | BEV 전체가 살짝 기울거나 늘어남 | (직접 작성) |
+
+실차 데이터 없어도 확인 가능. 같은 모델을 **열화된 BEV** 로 평가해서 오차가 얼마나 튀는지 볼 것.
+''')
+code('''
+degradations = {
+    "clean": None,
+    "pitch jitter": lambda b, r: augment.jitter_bev(b, cfg, r),
+    "ipm blur (far)": lambda b, r: augment.ipm_blur(b, cfg, r),
+    "tape erased": lambda b, r: augment.erase_patches(b, cfg, r),
+    "lighting": lambda b, r: augment.gamma(augment.brightness_contrast(augment.illumination(b, cfg, r), cfg, r), cfg, r),
+    "shadow": lambda b, r: augment.shadow(b, cfg, r),
+    "sensor (blur+noise+jpeg)": lambda b, r: augment.jpeg(augment.noise(augment.blur(b, cfg, r), cfg, r), cfg, r),
+    "all (example_augment)": lambda b, r: augment.example_augment(b, cfg, r),
+}
+rows = {k: train.evaluate(pred, trk, cfg, n=200, degrade_fn=f) for k, f in degradations.items()}
+tbl = pd.DataFrame({"mean (cm)": {k: r["mean_m"] * 100 for k, r in rows.items()},
+                    "max (cm)": {k: r["max_m"] * 100 for k, r in rows.items()}}).round(1)
+print("열화 종류별 waypoint 오차. clean 대비 얼마나 나빠지나:")
+display(tbl)
+
+# 각 열화가 BEV 를 실제로 어떻게 바꾸는지도 눈으로
+base = dataset.make_sample(trk, cfg, np.random.default_rng(3), mask=vis_mask)[0]
+tiles = [base] + [f(base, np.random.default_rng(2)) for k, f in degradations.items() if f]
+names = ["clean"] + [k for k, f in degradations.items() if f]
+for i in range(0, len(tiles), 4):
+    show(viz.side_by_side(*tiles[i:i + 4]), width=1000, title=" | ".join(names[i:i + 4]))
+''')
+
+md('''
+### 과제: sim-to-real 증강 설계
+`my_augment(bev, rng)` 를 써서 위 표의 열화들(그리고 표에 없는 실차 현상)에 강한 모델을 만들 것.
+
+1. 입력과 출력은 같은 크기의 BEV (BGR uint8). 라벨은 안 바뀌므로 **정답을 옮기는 변형(이동·회전)은 금지.**
+   정답을 유지하는 관측 변화만 허용.
+2. 아래 셀의 `AUGMENT_FN = my_augment` 로 두고 3장 첫 셀부터 다시 실행해 재학습.
+3. 위 열화 표를 다시 뽑아 plain 모델과 비교하고, 4장 폐루프에서 완주 여부와 횡오차 비교.
+4. 어떤 열화가 폐루프 실패로 이어지는지, 어떤 증강이 그걸 막았는지 한 문단으로 정리.
+
+`camsim/augment.py` 함수를 조합해도 되고 OpenCV 로 직접 써도 됨. 증강 과하게 넣으면 clean 성능이 깎이니 표로 확인할 것.
+`jitter_bev` 빼고 나머지는 실제 카메라 물리를 대충 근사한 것. 실차 영상 찍고 나면 실제로 뭐가 깨지는지 보고 다시 설계하는 게 맞음.
+''')
+code('''
+def my_augment(bev, rng):
+    # 여기를 채움. 주석 풀어 써도 되고 직접 OpenCV 로 짜도 됨. 세기는 파라미터 셀의 cfg.augment.*
+    out = bev
+    # --- 기하 (라벨은 그대로 두고 관측만 바꿈) ---
+    # out = augment.jitter_bev(out, cfg, rng)          # pitch 변화 -> BEV 휨
+    # out = augment.ipm_blur(out, cfg, rng)            # 먼 곳일수록 뭉개짐
+    # out = augment.erase_patches(out, cfg, rng)       # 테이프 마모·가림
+    # --- 조명 ---
+    # out = augment.illumination(out, cfg, rng)        # 불균일 조명
+    # out = augment.shadow(out, cfg, rng)              # 그림자
+    # out = augment.brightness_contrast(out, cfg, rng) # 노출
+    # out = augment.gamma(out, cfg, rng)               # 감마
+    # out = augment.hsv_shift(out, cfg, rng)           # 색온도
+    # --- 센서 ---
+    # out = augment.blur(out, cfg, rng)
+    # out = augment.noise(out, cfg, rng)
+    # out = augment.jpeg(out, cfg, rng)
+    # --- 직접 만들어 보기 ---
+    # out = cv2.GaussianBlur(out, (5, 5), 0)
+    # out = cv2.LUT(out, np.clip((np.arange(256) / 255) ** 0.8 * 255, 0, 255).astype(np.uint8))
+    return out
+
+AUGMENT_FN = my_augment      # 이렇게 두고 3장 첫 셀(ds_train)부터 다시 실행하면 증강 학습
+sample_bev = dataset.make_sample(trk, cfg, np.random.default_rng(3), mask=vis_mask)[0]
+show(viz.side_by_side(sample_bev, my_augment(sample_bev, np.random.default_rng(0))), width=600, title="my_augment 미리보기: 원본 | 증강")
+''')
+
+# =========================================================================== 4. 폐루프
+md('''
+## 4. 폐루프 검증 (gym, ROS 없음)
+제어 틱마다 BEV 렌더 → 모델 추론 → pure pursuit → `env.step`.
+종료 조건은 실차 규칙과 같음. **차체 모서리가 테이프를 넘으면 실격**(`tape_crossed`), 한 바퀴 돌면 `lap`.
+
+코랩은 실시간이 아니라서 그냥 두면 지연이 0. 젯슨의 지연을 흉내내는 버퍼(`latency_steps`, 1틱 = 1/control_hz 초)를
+꼭 넣어야 함. 먼저 **오라클**(정답 waypoint + 가우시안 노이즈)로 "인지 오차 σ와 지연이 얼마까지면 완주하나"를
+표로 만듦. 이게 배포 게이트 기준.
+''')
+code('''
+env = closed_loop.make_env(cfg)
+rows = closed_loop.sweep(env, trk, cfg, H_g2i, latency_list=LATENCIES, sigma_list=SIGMAS)
+df = pd.DataFrame(rows); json.dump(rows, open("out/sweep_oracle.json", "w"), indent=1)
+print(f"기준 경로 {cfg.waypoints.line} (길이 {trk.length:.1f} m), 제어 주기 {cfg.closed_loop.control_hz} Hz, 속도 {cfg.closed_loop.speed_mps} m/s, waypoint {cfg.waypoints.ahead_m} m")
+print("종료 이유 (lap = 완주, tape_crossed = 실격):")
+display(df.pivot(index="latency_steps", columns="sigma", values="reason"))
+print("평균 횡오차 (m):")
+display(df.pivot(index="latency_steps", columns="sigma", values="mean_lateral_m").round(3))
+''')
+
+md('''
+### 학습 모델로 주행
+지연을 바꿔 가며 달리고 횡오차 곡선을 겹쳐 그림.
+영상은 지연 0 주행. 왼쪽 카메라 뷰(참고), 오른쪽 모델 입력 BEV, 초록 = 모델이 낸 waypoint.
+''')
+code('''
+results = {}
+plt.figure(figsize=(8, 3.5))
+for lat in LATENCIES:
+    r = closed_loop.run(env, pred, trk, cfg, H_g2i, latency_steps=lat, video_path="out/run_latency0.mp4" if lat == LATENCIES[0] else None)
+    results[lat] = r
+    t = np.arange(r.steps) / r.control_hz_eff
+    plt.plot(t, r.lateral_trace * 100, label=f"latency {lat} ticks -> {r.reason} ({r.progress_m:.0f} m)")
+    print(f"latency={lat:2d}: {r.reason:12s} 진행 {r.progress_m:6.1f} m  시간 {r.time_s:5.1f} s  횡오차 평균 {r.mean_lateral_m*100:5.1f} cm  최대 {r.max_lateral_m*100:5.1f} cm")
+inner = (cfg.lane.track_width_m - cfg.lane.tape_width_m) / 2 - cfg.closed_loop.car_width_m / 2
+plt.axhline(inner * 100, color="r", ls="--", label="body touches tape (straight)")
+plt.xlabel("time (s)"); plt.ylabel("lateral error (cm)"); plt.legend(fontsize=8); plt.grid(alpha=.3); plt.show()
+display(Video(viz.to_h264("out/run_latency0.mp4"), embed=True, width=900))   # mp4v 는 브라우저가 못 읽어서 H.264 로 변환
+''')
+
+md('''
+### 맵 위의 주행 경로
+검은 점선 = 중심선(GT), 노란 선 = 테이프, 회색 실선 = 오라클 주행, 색 파선 = 학습 모델 주행(지연별).
+빈 원이 출발, 채운 원이 종료. 실격이면 그 자리에서 끊김.
+
+163 m 트랙에서 경로 차이는 수 cm 라 실제 축척으론 전부 겹쳐 보임. 그래서 **중심선 대비 편차만 `MAGNIFY` 배로 과장**해서 그림.
+실제 위치 아님. `MAGNIFY = 1` 이면 실제 축척. 아래 두 번째 그림(종료 지점 확대)은 원래부터 과장 없음.
+''')
+code('''
+MAGNIFY = 15      # 중심선 대비 편차를 몇 배로 과장할지. 1 = 실제 축척
+
+paths = {}
+r_or = closed_loop.run(env, model.OraclePredictor(trk, cfg), trk, cfg, H_g2i, latency_steps=0)
+paths[f"oracle -> {r_or.reason} ({r_or.progress_m:.0f} m)"] = r_or.pose_trace
+for lat, r in results.items():
+    paths[f"model latency {lat} -> {r.reason} ({r.progress_m:.0f} m, {r.time_s:.0f} s)"] = r.pose_trace
+pm, _ = viz.draw_paths_on_map(mapimg, trk, cfg, paths, magnify=MAGNIFY)
+show(pm, width=900, title="전체 맵: 경로 비교")
+
+r0 = results[LATENCIES[0]]
+plain, off = viz.draw_paths_on_map(mapimg, trk, cfg, paths, legend=False)      # 확대용은 실제 축척
+show(viz.crop_around(plain, off, mapimg, r0.pose_trace[-1], half_m=3.0, scale=3), width=500, title=f"지연 {LATENCIES[0]} 주행의 종료 지점 ({r0.reason}) — 실제 축척")
+''')
+
+# =========================================================================== 5. 보관
+md('''
+## 5. 결과 보관
+여기까지 만든 파일은 코랩 VM 에 있고 런타임 끊기면 사라짐. 아래 셀이 드라이브로 복사함.
+`model.pt` 는 SHA-256 검증하고 `checkpoint.json` 에 설정과 git commit 을 같이 기록함. 젯슨에서 받을 때 그 해시로 대조.
+데이터셋은 zip 하나로 묶어서 옮김. 파일 2만 개를 그대로 올리면 드라이브가 못 견딤.
+''')
+code('''
+from pathlib import Path
+import shutil
+
+SAVE_DATASET = False    # 데이터셋 zip 까지 보관하려면 True
+checkpoint = Path("model.pt")
+if not checkpoint.is_file(): raise FileNotFoundError("model.pt 없음. 3장 학습 셀을 먼저 실행할 것")
+
+from google.colab import drive
+drive.mount("/content/drive")
+dst = Path("/content/drive/MyDrive/camsim_results")
+git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+manifest = handoff.export_checkpoint(checkpoint, dst, cfg, git_commit)
+for name in ("sweep_oracle.json", "run_latency0.mp4"):
+    src = Path("out") / name
+    if src.is_file(): shutil.copy2(src, dst / name)
+if SAVE_DATASET:
+    archive = shutil.make_archive("out/dataset", "zip", root_dir="out", base_dir="dataset")
+    shutil.copy2(archive, dst / "dataset.zip")
+print("Drive 저장:", dst / checkpoint.name)
+print("SHA-256:", manifest["sha256"])
+print("Git commit:", git_commit)
+print("Drive 에서 model.pt 공유 링크를 복사해 Jetson 의 gdown 명령에 쓸 것")
+''')
 
 nb = {"cells": cells,
       "metadata": {"kernelspec": {"name": "python3", "display_name": "Python 3"},

@@ -1,6 +1,6 @@
-"""Move a trained checkpoint to a mounted Drive directory and verify the copy.
+"""학습된 체크포인트를 드라이브로 옮기고 복사가 제대로 됐는지 확인함.
 
-This module only handles files. It does not import PyTorch or run inference.
+파일만 다룸. torch 안 부르고 추론도 안 함.
 """
 
 from dataclasses import asdict
@@ -20,7 +20,7 @@ def sha256_file(path) -> str:
 
 
 def export_checkpoint(source, destination, cfg, git_commit: str) -> dict:
-    """Copy source to destination and write a checked checkpoint.json manifest."""
+    """source 를 destination 에 복사하고, 검증된 checkpoint.json manifest 를 같이 씀."""
     source, destination = Path(source), Path(destination)
     if not source.is_file():
         raise FileNotFoundError(source)

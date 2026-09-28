@@ -17,7 +17,7 @@ def test_to_world_inverts_to_vehicle(ctx):
 
 def test_map_pixels_match_gym_convention(ctx):
     cfg, trk, m = ctx
-    # 맵 origin은 좌하단, y가 커지면 row가 줄어든다
+    # 맵 origin 은 좌하단, y 커지면 row 줄어듦
     a = m.world_to_px([m.ox, m.oy]); b = m.world_to_px([m.ox, m.oy + m.res])
     assert np.allclose(a, [0, m.h - 1]) and np.allclose(b, [0, m.h - 2])
 
@@ -55,7 +55,7 @@ def test_draw_paths_on_map_marks_paths(ctx):
     img, off = viz.draw_paths_on_map(m, trk, cfg, {"a": path, "b": trk.center[300:400]})
     px = np.round(m.world_to_px(path[100]) - off).astype(int)
     near = img[px[1] - 2:px[1] + 3, px[0] - 2:px[0] + 3].reshape(-1, 3).astype(int)
-    d = np.abs(near - np.array(viz.PATH_COLORS[0])).sum(1)   # 얇은 AA 선이라 정확 일치 대신 근접도로 본다
+    d = np.abs(near - np.array(viz.PATH_COLORS[0])).sum(1)   # 얇은 AA 선이라 정확 일치 대신 근접도로 봄
     assert d.min() < 90 and d.min() < np.abs(255 - np.array(viz.PATH_COLORS[0])).sum()
     zoom = viz.crop_around(img, off, m, path[-1], half_m=3.0, scale=2)
     assert zoom.shape[0] > 0 and zoom.ndim == 3
@@ -75,7 +75,7 @@ def test_to_h264_converts(tmp_path):
 
 
 def test_dashed_paths_leave_gaps(ctx):
-    """두 번째 이후 경로는 파선이라 같은 경로를 실선으로 그린 것보다 픽셀이 적어야 한다."""
+    """두 번째 이후 경로는 파선이라 같은 경로를 실선으로 그린 것보다 픽셀이 적어야 함."""
     cfg, trk, m = ctx
     p = trk.center[:400]
     solid, _ = viz.draw_paths_on_map(m, trk, cfg, {"a": p}, dashed=False)

@@ -31,10 +31,10 @@ def test_resample_is_uniform_and_closed(ctx, ctx_racing):
         assert np.hypot(*(trk.center[0] - trk.center[-1])) > 0.03   # no duplicated closing point
         assert trk.s[0] == 0.0 and trk.s[-1] < trk.length
     assert ctx_racing[1].length == pytest.approx(156.36, abs=0.2)   # a property of the CSV
-    assert ctx[1].length > ctx_racing[1].length                     # 중간선이 레이싱 라인보다 길다
+    assert ctx[1].length > ctx_racing[1].length                     # 중간선이 레이싱 라인보다 긺
 
 def test_heading_matches_direction(ctx):
-    """heading 은 중앙차분 접선이므로, 곡률이 작은 구간에서 전방 세그먼트 방향과 거의 같아야 한다."""
+    """heading 은 중앙차분 접선이라, 곡률 작은 구간에서 전방 세그먼트 방향과 거의 같아야 함."""
     cfg, trk = ctx
     d = np.roll(trk.center, -1, axis=0) - trk.center
     seg = np.arctan2(d[:, 1], d[:, 0])

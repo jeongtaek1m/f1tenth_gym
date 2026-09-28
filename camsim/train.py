@@ -1,7 +1,7 @@
 """학습 루프와 오프라인 평가.
 
-손실은 Huber(SmoothL1). waypoint 회귀라 가끔 튀는 라벨에 L2 보다 덜 흔들린다.
-타깃이 미터 단위라 오차가 1 m 안이면 L2 처럼 동작한다. L1 구간을 쓰고 싶으면 beta 를 줄인다.
+손실은 Huber(SmoothL1). waypoint 회귀라 가끔 튀는 라벨에 L2 보다 덜 흔들림.
+타깃이 미터 단위라 오차가 1 m 안이면 L2 처럼 동작. L1 구간 쓰고 싶으면 beta 줄일 것.
 """
 import time
 import numpy as np
@@ -19,9 +19,9 @@ def _summary(errs_m) -> dict:
 
 
 def evaluate(predictor, track: Track, cfg: Config, n: int = 200, seed: int = 123, degrade_fn=None) -> dict:
-    """새로 뽑은 pose n 개에 대한 waypoint 오차(m). 예측점과 정답점 사이 거리다.
+    """새로 뽑은 pose n 개에 대한 waypoint 오차(m). 예측점과 정답점 사이 거리.
 
-    degrade_fn(bev, rng) 을 주면 열화된 입력에 대한 강건성 측정이 된다 (노트북 3장 sim-to-real 표).
+    degrade_fn(bev, rng) 주면 열화된 입력에 대한 강건성 측정이 됨 (노트북 3장 sim-to-real 표).
     """
     from .camera import build
     from .render import bev_visibility_mask
@@ -30,14 +30,14 @@ def evaluate(predictor, track: Track, cfg: Config, n: int = 200, seed: int = 123
     errs = []
     for _ in range(n):
         bev, wp, pose = make_sample(track, cfg, rng, degrade_fn, mask=mask)
-        if hasattr(predictor, "set_pose"):        # OraclePredictor 는 이미지가 아니라 pose 를 본다
+        if hasattr(predictor, "set_pose"):        # OraclePredictor 는 이미지가 아니라 pose 를 봄
             predictor.set_pose(pose)
         errs.append(np.hypot(*(predictor.predict(bev) - wp)))
     return _summary(errs)
 
 
 def _batches(dataset, batch_size, num_workers, seed):
-    """무한 배치 스트림. DiskDataset 은 epoch 를 계속 돌려서 무한으로 만든다."""
+    """무한 배치 스트림. DiskDataset 은 epoch 계속 돌려서 무한으로 만듦."""
     if isinstance(dataset, torch.utils.data.IterableDataset):
         yield from DataLoader(dataset, batch_size=batch_size, num_workers=num_workers)
     else:
@@ -63,10 +63,10 @@ def _val_loss(net, val_dataset, loss_fn, batch_size, val_batches, device):
 def train(track: Track, cfg: Config, steps: int, batch_size: int = 32, lr: float = 1e-3,
           device: str = "cpu", out_path=None, num_workers: int = 0, log_every: int = 50, seed: int = 0,
           dataset=None, val_dataset=None, val_batches: int = 8, callback=None):
-    """dataset 을 안 주면 온더플라이(SynthDataset)로 학습한다.
+    """dataset 안 주면 온더플라이(SynthDataset)로 학습.
 
-    val_dataset 이 있으면 log_every 마다 val loss 도 재서 history 에 넣는다.
-    callback(history) 는 log_every 마다 불린다. 노트북에서 loss 곡선을 실시간으로 그릴 때 쓴다.
+    val_dataset 있으면 log_every 마다 val loss 도 재서 history 에 넣음.
+    callback(history) 는 log_every 마다 불림. 노트북에서 loss 곡선 실시간으로 그릴 때 씀.
     """
     torch.manual_seed(seed)
     net = M.WaypointNet().to(device)
@@ -100,7 +100,7 @@ def train(track: Track, cfg: Config, steps: int, batch_size: int = 32, lr: float
 
 
 def evaluate_dataset(predictor, ds: DiskDataset, n: int = None) -> dict:
-    """저장된 이미지(보통 val split)로 재는 waypoint 오차. 증강 없이 원본을 쓴다."""
+    """저장된 이미지(보통 val split)로 재는 waypoint 오차. 증강 없이 원본 씀."""
     n = len(ds) if n is None else min(n, len(ds))
     errs = [np.hypot(*(predictor.predict(ds.load_image(i)) - ds.wps[ds.idx[i]])) for i in range(n)]
     return _summary(errs)

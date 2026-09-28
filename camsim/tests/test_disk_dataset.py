@@ -19,7 +19,7 @@ def test_files_and_labels_written(ctx):
     assert os.path.isfile(os.path.join(root, "spec.json"))
 
 def test_labels_match_geometry(ctx):
-    """저장된 waypoint는 저장된 pose에서 다시 계산한 GT와 같아야 한다 (라벨 파일이 자기 설명적)."""
+    """저장된 waypoint 는 저장된 pose 에서 다시 계산한 GT 와 같아야 함 (라벨 파일이 자기 설명적)."""
     cfg, trk, root = ctx
     _, poses, wps = dataset.read_labels(root)
     for p, w in zip(poses[:5], wps[:5]):
@@ -52,7 +52,7 @@ def test_train_on_disk_and_evaluate(ctx, tmp_path):
     assert r["n"] == 6 and np.isfinite(r["mean_m"]) and r["errs_m"].shape == (6,)
 
 def test_changed_config_is_detected(ctx):
-    """설정이 바뀌면 옛 데이터를 조용히 쓰면 안 된다. needs_regeneration 이 알려주고 DiskDataset 은 거부한다."""
+    """설정 바뀌면 옛 데이터를 조용히 쓰면 안 됨. needs_regeneration 이 알려주고 DiskDataset 은 거부함."""
     cfg, trk, root = ctx
     assert not dataset.needs_regeneration(root, cfg)
     cfg2 = copy.deepcopy(cfg); cfg2.waypoints.ahead_m += 0.5

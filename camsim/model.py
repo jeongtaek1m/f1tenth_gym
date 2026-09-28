@@ -1,6 +1,6 @@
 """작은 CNN 과 predict 래퍼.
 
-시뮬 폐루프와 실차 ROS 노드가 똑같이 Predictor.predict(bev) 를 부른다. 그게 이 설계의 목표다.
+시뮬 폐루프와 실차 ROS 노드가 똑같이 Predictor.predict(bev) 를 부름. 그게 이 설계의 목표.
 출력은 waypoint 하나의 (x, y), 단위 m.
 """
 from dataclasses import asdict
@@ -20,11 +20,11 @@ def _block(cin, cout):
 
 
 class WaypointNet(nn.Module):
-    """stride 2 블록 5개로 줄이고 head 에서 (x, y) 를 뽑는다.
+    """stride 2 블록 5개로 줄이고 head 에서 (x, y) 뽑음.
 
-    AdaptiveAvgPool 을 써서 BEV 해상도를 바꿔도 head 크기는 그대로다. 편하지만 부작용이 있는데,
-    학습 때와 다른 해상도를 넣어도 에러 없이 돌아가고 출력만 엉망이 된다. load() 가 input_spec 을
-    검사하는 이유다.
+    AdaptiveAvgPool 써서 BEV 해상도 바꿔도 head 크기는 그대로. 편하지만 부작용 있음 —
+    학습 때와 다른 해상도를 넣어도 에러 없이 돌아가고 출력만 엉망이 됨. load() 가 input_spec 을
+    검사하는 이유.
     """
 
     def __init__(self):
@@ -50,13 +50,13 @@ class Predictor:
         return self.net(x)[0].cpu().numpy() * self.cfg.waypoints.norm_m
 
     def predict_camera(self, cam_bgr: np.ndarray, H_i2g: np.ndarray) -> np.ndarray:
-        """실차용. 카메라 영상을 IPM 으로 펴서 predict 에 넘긴다."""
+        """실차용. 카메라 영상을 IPM 으로 펴서 predict 에 넘김."""
         return self.predict(ipm_bev(cam_bgr, H_i2g, self.cfg))
 
 
 class OraclePredictor:
-    """모델 대신 정답을 그대로 돌려준다. 학습된 모델이 없어도 폐루프를 돌려볼 수 있고,
-    noise_sigma 를 올려서 "인지 오차가 이만큼이면 주행이 어디서 깨지나"를 볼 수도 있다."""
+    """모델 대신 정답을 그대로 돌려줌. 학습된 모델 없어도 폐루프 돌려볼 수 있고,
+    noise_sigma 올려서 "인지 오차가 이만큼이면 주행이 어디서 깨지나"도 볼 수 있음."""
 
     def __init__(self, track: Track, cfg: Config, noise_sigma: float = 0.0, rng=None):
         self.track, self.cfg, self.sigma = track, cfg, noise_sigma
@@ -74,7 +74,7 @@ class OraclePredictor:
 
 
 def _input_spec(cfg: Config) -> dict:
-    """체크포인트가 어떤 입력/출력 규격으로 학습됐는지. 이게 다르면 가중치를 이어 쓸 수 없다."""
+    """체크포인트가 어떤 입력/출력 규격으로 학습됐는지. 이게 다르면 가중치 이어 쓸 수 없음."""
     return {"bev": asdict(cfg.bev), "waypoints": asdict(cfg.waypoints),
             "lane_colors": {"floor": cfg.lane.color_floor, "tape": cfg.lane.color_tape}}
 

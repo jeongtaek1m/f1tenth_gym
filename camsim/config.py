@@ -1,7 +1,7 @@
 """config.yaml -> dataclass.
 
-학생이 건드리는 파일이 config.yaml 하나뿐이라, 키를 빠뜨리거나 오타를 내면 여기서 잡아준다.
-그냥 통과시키면 한참 뒤 엉뚱한 곳에서 KeyError 가 나서 원인 찾기가 어렵다.
+학생이 건드리는 파일이 config.yaml 하나뿐이라, 키를 빠뜨리거나 오타 내면 여기서 잡아줌.
+그냥 통과시키면 한참 뒤 엉뚱한 데서 KeyError 나서 원인 찾기 어려움.
 """
 from dataclasses import dataclass, fields
 from typing import List, Optional
@@ -111,7 +111,7 @@ class Config:
 
 
 def _build(cls, section: str, data):
-    """yaml 한 섹션 -> dataclass. 빠진 키와 모르는 키를 한 번에 모아서 보고한다."""
+    """yaml 한 섹션 -> dataclass. 빠진 키와 모르는 키를 한 번에 모아서 보고."""
     if not isinstance(data, dict):
         raise ConfigError(f"section '{section}' must be a mapping")
     names = {f.name for f in fields(cls)}
@@ -135,8 +135,8 @@ def load(path: Optional[str] = None) -> Config:
         if name not in raw:
             raise ConfigError(f"missing section '{name}'")
         built[name] = _build(cls, name, raw[name])
-    # 렌더 해상도 비율이 센서 비율과 다르면 화각 계산이 조용히 틀어진다.
-    # 기본값은 640x400 = 1.600, 6.62x4.14mm = 1.599 로 맞춰 둔 것이다.
+    # 렌더 해상도 비율이 센서 비율과 다르면 화각 계산이 조용히 틀어짐.
+    # 기본값은 640x400 = 1.600, 6.62x4.14mm = 1.599 로 맞춰 둔 것.
     cam = built["camera"]
     render_ar = cam.image_width / cam.image_height
     sensor_ar = cam.sensor_width_mm / cam.sensor_height_mm

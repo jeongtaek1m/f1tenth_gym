@@ -11,7 +11,7 @@ def bev_hw(cfg):
     return bev_size(cfg)
 
 def test_make_sample_is_bev_with_camera_mask(ctx):
-    """모델 입력은 BEV. 카메라가 못 보는 근거리(0.32 m 안쪽)는 바닥색이어야 한다(실차 IPM 출력과 동일)."""
+    """모델 입력은 BEV. 카메라가 못 보는 근거리(0.32 m 안쪽)는 바닥색이어야 함 (실차 IPM 출력과 동일)."""
     cfg, trk = ctx
     bev, wp, pose, cam = dataset.make_sample(trk, cfg, np.random.default_rng(0), with_camera=True)
     h, w = bev_hw(cfg)
@@ -69,7 +69,7 @@ def test_save_load(ctx, tmp_path):
 
 @pytest.mark.parametrize("change", ["bev", "waypoint", "color"])
 def test_load_rejects_changed_input_spec(ctx, tmp_path, change):
-    """다른 규격으로 학습한 체크포인트는 조용히 로드되면 안 된다."""
+    """다른 규격으로 학습한 체크포인트는 조용히 로드되면 안 됨."""
     from copy import deepcopy
     cfg, _ = ctx
     path = tmp_path / "m.pt"
@@ -82,7 +82,7 @@ def test_load_rejects_changed_input_spec(ctx, tmp_path, change):
         model.load(path, changed)
 
 def test_predict_camera_matches_predict_on_ipm(ctx):
-    """실차 경로(카메라 -> IPM -> predict)는 같은 BEV를 직접 넣은 것과 같아야 한다."""
+    """실차 경로(카메라 -> IPM -> predict)는 같은 BEV 를 직접 넣은 것과 같아야 함."""
     from camsim import camera, render
     cfg, trk = ctx
     H_g2i, H_i2g = camera.build(cfg)
