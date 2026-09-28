@@ -25,7 +25,7 @@ class WaypointNet(nn.Module):
     학습 때와 다른 해상도를 넣어도 에러 없이 돌아가고 출력만 엉망이 된다. config 를 맞춰야 하는 이유.
     """
 
-    def __init__(self, n_out: int = 12):
+    def __init__(self, n_out: int = 2):
         super().__init__()
         self.features = nn.Sequential(_block(3, 16), _block(16, 32), _block(32, 64),
                                       _block(64, 128), _block(128, 128))

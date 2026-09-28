@@ -88,7 +88,6 @@ class ClosedLoop:
     map_yaml: str
     centerline_csv: str
     control_hz: int
-    lookahead_m: float
     speed_mps: float
     latency_steps: int
     max_steps: int

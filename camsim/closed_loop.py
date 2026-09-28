@@ -96,7 +96,7 @@ def run(env, predictor, track: Track, cfg: Config, H_g2i: np.ndarray, start_inde
                 predictor.set_pose(pose)
             buf.append(predictor.predict(bev))
             wp = buf.popleft()                     # latency_steps 틱 전의 예측으로 조향한다
-            steer = pure_pursuit(wp, cl.lookahead_m, cl.wheelbase_m, cl.steer_max_rad)
+            steer = pure_pursuit(wp, cl.wheelbase_m, cl.steer_max_rad)
             if video_path is not None:
                 cam = render.draw_points(render.render(pose, track.quads, obs["scans"][0], H_g2i, cfg), wp, H_g2i)
                 frame = viz.side_by_side(cam, render.draw_points_bev(bev.copy(), wp, cfg))
