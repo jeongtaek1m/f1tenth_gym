@@ -74,7 +74,7 @@ def train(track: Track, cfg: Config, steps: int, batch_size: int = 32, lr: float
         raise ValueError(f"dataset has {len(dataset)} samples but batch_size is {batch_size}; "
                          f"generate more data or lower the batch size")
     torch.manual_seed(seed)
-    net = M.WaypointNet().to(device)
+    net = M.WaypointNet(cfg).to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
     loss_fn = torch.nn.SmoothL1Loss()

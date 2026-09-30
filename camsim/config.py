@@ -84,12 +84,17 @@ class Augment:
 
 
 @dataclass
+class Model:
+    arch: str
+    pretrained: bool
+
+
+@dataclass
 class ClosedLoop:
     map_yaml: str
     centerline_csv: str
     control_hz: int
     speed_mps: float
-    latency_steps: int
     max_steps: int
     car_length_m: float
     car_width_m: float
@@ -106,6 +111,7 @@ class Config:
     waypoints: Waypoints
     sampling: Sampling
     augment: Augment
+    model: Model
     closed_loop: ClosedLoop
     path: str = DEFAULT_PATH
 

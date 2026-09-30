@@ -40,9 +40,9 @@ md('''
 |---|---|---|
 | 1 | 카메라와 트랙 | 카메라 높이·pitch·화각, 테이프 배치, 색 |
 | 2 | 정답(GT)과 데이터셋 | 정답 경로 기준(center/racing), pose 샘플링 범위, waypoint 거리, 장 수 |
-| 3 | 학습 + sim-to-real 과제 | 스텝, 배치, 학습률, 증강 함수 |
-| 4 | 폐루프 | 속도, 지연, 인지 노이즈 |
-| 5 | 결과 보관 | |
+| 3 | 학습 + sim-to-real 과제 | 모델 구조, 스텝, 배치, 학습률, 증강 함수 |
+| 4 | 폐루프 | 속도 |
+| 5 | 결과 보관 + 젯슨용 ONNX | |
 ''')
 
 md('''
@@ -94,7 +94,7 @@ import os, sys, json, time, subprocess, numpy as np, cv2, torch, pandas as pd
 import matplotlib.pyplot as plt
 from IPython.display import Image, Video, display, clear_output
 os.chdir("/content/f1tenth_gym")
-sys.path.insert(0, "/content/f1tenth_gym/gym")   # f110_gym. pip -e 의 .pth 는 런타임 재시작 전엔 안 읽힘
+sys.path[:0] = ["/content/f1tenth_gym", "/content/f1tenth_gym/gym"]   # camsim, f110_gym. pip -e 의 .pth 는 재시작 전엔 안 읽힘
 from camsim import config, camera, track, render, gt, augment, dataset, model, train, closed_loop, viz, handoff
 
 plt.rcParams["axes.unicode_minus"] = False       # 코랩 기본 폰트에 한글 없음. 그래프 글자는 영어로
@@ -115,8 +115,8 @@ md('''
 
 | 바꾼 것 | 다시 실행 |
 |---|---|
-| `STEPS`, `BATCH`, `LR`, `AUGMENT_FN` | 이 셀 → 3장 |
-| `speed_mps`, `LATENCIES`, `SIGMAS` | 이 셀 → 4장 |
+| `model.arch`, `STEPS`, `BATCH`, `LR`, `AUGMENT_FN` | 이 셀 → 3장 |
+| `speed_mps` | 이 셀 → 4장 |
 | 카메라, 테이프 배치, `waypoints.line`, `ahead_m`, `sampling.*` | 이 셀 → 2장(설정 바뀐 걸 알아채고 데이터 다시 만듦) → 3장 → 4장 |
 ''')
 code('''
@@ -138,15 +138,17 @@ cfg.waypoints.line = "center"     # 정답 경로 기준. "center" = 좌우 테�
 cfg.waypoints.ahead_m = 1.0       # 예측할 waypoint 의 전방 거리 (m). 이 점이 곧 pure pursuit 목표점. 2 m 넘기지 말 것
 cfg.sampling.lateral_frac = 0.35  # 기준선에서 ±트랙폭*frac 범위에 pose 뿌림
 cfg.sampling.heading_deg  = 15.0  # 헤딩도 ± 이만큼
-N_DATASET = 1000                  # 저장할 장 수
+N_DATASET = 10000                 # 저장할 장 수. resnet18 은 파라미터가 1,200만이라 1000 장이면 외워 버림
 DATA_DIR = "out/dataset"
 
 # ---- 3장: 학습 ----
-STEPS, BATCH, LR = 3000, 32, 1e-3
+cfg.model.arch = "resnet18"       # "resnet18" (ImageNet 사전학습) | "small" (작은 CNN, 젯슨이 느리면)
+cfg.model.pretrained = True
+STEPS, BATCH, LR = 3000, 32, 3e-4  # 사전학습 가중치라 LR 을 낮게. 1e-3 이면 초반에 망가짐
 
 # 증강 세기. 기본 학습은 증강 없이(plain) 하고, 아래 값은 3장 sim-to-real 과제에서 씀
 cfg.augment.pitch_jitter_deg = 2.0    # 가감속 때 pitch 변해서 BEV 휘는 정도 (도)
-cfg.augment.ipm_blur_max_px = 9       # 먼 곳일수록 커지는 블러
+cfg.augment.ipm_blur_max_px = 5       # 먼 곳일수록 커지는 블러 (px. BEV 1 px = 1 cm)
 cfg.augment.tape_dropout_prob = 0.3   # 테이프 마모·가림
 cfg.augment.brightness_delta = 40     # 노출 변화
 cfg.augment.contrast_range = [0.8, 1.2]
@@ -155,15 +157,13 @@ cfg.augment.hue_shift_deg = 15        # 조명 색온도
 cfg.augment.sat_scale = [0.7, 1.3]
 cfg.augment.illum_strength = 0.3      # 불균일 조명
 cfg.augment.shadow_prob = 0.3
-cfg.augment.blur_max_px = 5
+cfg.augment.blur_max_px = 3
 cfg.augment.noise_sigma = 6
 cfg.augment.jpeg_quality = [40, 90]   # image_transport compressed 아티팩트
 
 # ---- 4장: 폐루프 ----
 cfg.closed_loop.speed_mps = 2.0
-cfg.closed_loop.max_steps = 4000
-LATENCIES = [0, 2, 4, 6]              # 제어 틱 단위 지연 (1틱 = 1/control_hz 초)
-SIGMAS = [0.0, 0.05, 0.1, 0.2]        # 인지 노이즈 σ (m)
+cfg.closed_loop.max_steps = 4000      # 제어 틱. 25 Hz 라 160 초에서 끊음
 
 trk = track.from_csv(cfg.closed_loop.centerline_csv, cfg)
 H_g2i, H_i2g = camera.build(cfg)
@@ -213,7 +213,7 @@ md('''
 
 **가운데와 오른쪽이 같은 모양이어야** 시뮬에서 학습한 가중치가 실차로 넘어감.
 멀어질수록 오른쪽이 늘어지고 끊기는데 그게 IPM 해상도 한계. 이 카메라(높이 0.2 m)로는 1.5 m 까지 테이프 위치가
-0.3 cm 안에서 복구되고, 2 m 넘으면 코너에서 10 cm 씩 튐. waypoint 를 1 m 에 두는 이유.
+0.5 cm 안에서 복구되고, 2 m 넘으면 코너에서 7 cm 씩 튐. waypoint 를 1 m 에 두는 이유.
 ''')
 code('''
 vis_mask = render.bev_visibility_mask(H_g2i, cfg)
@@ -262,7 +262,7 @@ md('''
 ### 데이터셋 저장
 `out/dataset/images/NNNNNN.png` (BEV) 와 `labels.csv` (pose, waypoint) 로 저장. 증강은 저장 안 하고 학습 로딩 때
 함수 하나(`augment_fn`)로 넣음. 같은 데이터로 증강만 바꿔 가며 비교하려고.
-20,000장이면 코랩 CPU 로 몇 분, 디스크 350 MB 정도. 드라이브 말고 **코랩 로컬 디스크**에 만들 것.
+BEV 는 380×300 (1 px = 1 cm). 10,000장이면 1~2분, 디스크 90 MB 정도. 드라이브 말고 **코랩 로컬 디스크**에 만들 것.
 같이 저장되는 `spec.json` 덕에 설정이 바뀌면 다음 실행 때 알아서 다시 만듦.
 
 실차에서도 IPM 으로 만든 BEV 를 같은 포맷으로 저장하면 아래 코드가 그대로 돎.
@@ -299,8 +299,20 @@ plt.tight_layout(); plt.show()
 # =========================================================================== 3. 학습
 md('''
 ## 3. 학습
-파라미터 38만 개짜리 작은 CNN 이 BEV 를 받아 waypoint 하나의 (x, y) 좌표(m)를 냄. 손실은 Huber.
-BEV 해상도(`cfg.bev.resolution_m`)를 낮추면 학습이 빨라짐.
+BEV 를 받아 waypoint 하나의 (x, y) 좌표(m)를 냄. 손실은 Huber.
+
+```
+BEV (3, 380, 300) BGR  →  ResNet-18 백본 (ImageNet 사전학습)  →  (512, 12, 10)
+                       →  1×1 conv 512→32  →  flatten 3840  →  FC 256  →  FC 2 = (x, y)
+```
+
+- **사전학습 백본**: 시뮬 BEV 는 깨끗한 노란 줄뿐이라, 처음부터 배운 모델은 실차 조명·질감 변화에 무너지기 쉬움.
+  ImageNet 특징이 그런 변화에 더 강함. 이득은 시뮬 오차보다 3장 열화 표에서 보임.
+- **pooling 없는 head**: 점이 **어디** 있는지가 답이라 위치 정보를 평균 내 버리면 안 됨. 그리고 젯슨 TensorRT 용 ONNX 로
+  깨끗하게 넘어가야 해서 AdaptiveAvgPool 을 안 씀 (입력 크기에 따라 변환이 실패함).
+- **BGR 입력**: ImageNet 가중치는 RGB 로 학습됐는데, conv1 의 입력 채널 순서를 뒤집어서 BGR 을 그대로 받게 함.
+
+`cfg.model.arch = "small"` 이면 작은 CNN (37만 파라미터). 학습이 훨씬 빠르고, 젯슨이 느리면 이걸로.
 
 train/val 은 9:1. **train loss 만 내려가고 val loss 가 멈추면 오버피팅.** 스텝과 장 수를 바꿔 비교해 볼 것.
 연한 선이 원 값, 진한 선이 5점 이동평균. val 은 매번 약 1,000장으로 재는데도 좀 흔들림 — 샘플마다 난이도가 달라서
@@ -376,6 +388,7 @@ md('''
 | 캘리브레이션 오차 | BEV 전체가 살짝 기울거나 늘어남 | (직접 작성) |
 
 실차 데이터 없어도 확인 가능. 같은 모델을 **열화된 BEV** 로 평가해서 오차가 얼마나 튀는지 볼 것.
+`model.arch` 를 `small` 로 바꿔 다시 학습하고 이 표를 비교하면, 사전학습 백본이 실제로 버티는지 보임.
 ''')
 code('''
 degradations = {
@@ -449,95 +462,94 @@ md('''
 제어 틱마다 BEV 렌더 → 모델 추론 → pure pursuit → `env.step`.
 종료 조건은 실차 규칙과 같음. **차체 모서리가 테이프를 넘으면 실격**(`tape_crossed`), 한 바퀴 돌면 `lap`.
 
-코랩은 실시간이 아니라서 그냥 두면 지연이 0. 젯슨의 지연을 흉내내는 버퍼(`latency_steps`, 1틱 = 1/control_hz 초)를
-꼭 넣어야 함. 먼저 **오라클**(정답 waypoint + 가우시안 노이즈)로 "인지 오차 σ와 지연이 얼마까지면 완주하나"를
-표로 만듦. 이게 배포 게이트 기준.
+횡오차 그래프의 빨간 점선이 테이프 한계선. 곡선이 여기 닿으면 실격. 트랙 폭이 구간마다 다르면 선도 같이 움직임.
+영상은 왼쪽 카메라 뷰(참고), 오른쪽 모델 입력 BEV, 초록 = 모델이 낸 waypoint.
 ''')
 code('''
 env = closed_loop.make_env(cfg)
-rows = closed_loop.sweep(env, trk, cfg, H_g2i, latency_list=LATENCIES, sigma_list=SIGMAS)
-df = pd.DataFrame(rows); json.dump(rows, open("out/sweep_oracle.json", "w"), indent=1)
-print(f"기준 경로 {cfg.waypoints.line} (길이 {trk.length:.1f} m), 제어 주기 {cfg.closed_loop.control_hz} Hz, 속도 {cfg.closed_loop.speed_mps} m/s, waypoint {cfg.waypoints.ahead_m} m")
-print("종료 이유 (lap = 완주, tape_crossed = 실격):")
-display(df.pivot(index="latency_steps", columns="sigma", values="reason"))
-print("평균 횡오차 (m):")
-display(df.pivot(index="latency_steps", columns="sigma", values="mean_lateral_m").round(3))
-''')
+r = closed_loop.run(env, pred, trk, cfg, H_g2i, video_path="out/run.mp4")
+print(f"{r.reason}  진행 {r.progress_m:.1f} / {trk.length:.1f} m  시간 {r.time_s:.1f} s  "
+      f"횡오차 평균 {r.mean_lateral_m*100:.1f} cm  최대 {r.max_lateral_m*100:.1f} cm")
 
-md('''
-### 학습 모델로 주행
-지연을 바꿔 가며 달리고 횡오차 곡선을 겹쳐 그림.
-영상은 지연 0 주행. 왼쪽 카메라 뷰(참고), 오른쪽 모델 입력 BEV, 초록 = 모델이 낸 waypoint.
-''')
-code('''
-results = {}
+t = np.arange(r.steps) / r.control_hz_eff
+idx = [gt.nearest_index(trk, p[:2]) for p in r.pose_trace]
+limit = np.minimum(trk.left_m[idx], trk.right_m[idx]) - cfg.lane.tape_width_m / 2 - cfg.closed_loop.car_width_m / 2
 plt.figure(figsize=(8, 3.5))
-for lat in LATENCIES:
-    r = closed_loop.run(env, pred, trk, cfg, H_g2i, latency_steps=lat, video_path="out/run_latency0.mp4" if lat == LATENCIES[0] else None)
-    results[lat] = r
-    t = np.arange(r.steps) / r.control_hz_eff
-    plt.plot(t, r.lateral_trace * 100, label=f"latency {lat} ticks -> {r.reason} ({r.progress_m:.0f} m)")
-    print(f"latency={lat:2d}: {r.reason:12s} 진행 {r.progress_m:6.1f} m  시간 {r.time_s:5.1f} s  횡오차 평균 {r.mean_lateral_m*100:5.1f} cm  최대 {r.max_lateral_m*100:5.1f} cm")
-inner = (cfg.lane.track_width_m - cfg.lane.tape_width_m) / 2 - cfg.closed_loop.car_width_m / 2
-plt.axhline(inner * 100, color="r", ls="--", label="body touches tape (straight)")
+plt.plot(t, r.lateral_trace * 100, label=f"model -> {r.reason}")
+plt.plot(t, limit * 100, "r--", label="body touches tape")
 plt.xlabel("time (s)"); plt.ylabel("lateral error (cm)"); plt.legend(fontsize=8); plt.grid(alpha=.3); plt.show()
-display(Video(viz.to_h264("out/run_latency0.mp4"), embed=True, width=900))   # mp4v 는 브라우저가 못 읽어서 H.264 로 변환
+display(Video(viz.to_h264("out/run.mp4"), embed=True, width=900))   # mp4v 는 브라우저가 못 읽어서 H.264 로 변환
 ''')
 
 md('''
 ### 맵 위의 주행 경로
-검은 점선 = 중심선(GT), 노란 선 = 테이프, 회색 실선 = 오라클 주행, 색 파선 = 학습 모델 주행(지연별).
-빈 원이 출발, 채운 원이 종료. 실격이면 그 자리에서 끊김.
+위 그래프는 얼마나 벗어났는지만 보여주고 **트랙 어디서**인지는 안 보여줌. 그래서 경로를 맵에 그림.
+회색 실선 = 오라클(정답 waypoint 그대로 달린 것), 색 파선 = 모델. 모델만 벗어나는 코너면 모델 탓,
+오라클도 같이 벗어나면 그 코너는 이 속도·목표점으로 원래 무리.
 
-163 m 트랙에서 경로 차이는 수 cm 라 실제 축척으론 전부 겹쳐 보임. 그래서 **중심선 대비 편차만 `MAGNIFY` 배로 과장**해서 그림.
-실제 위치 아님. `MAGNIFY = 1` 이면 실제 축척. 아래 두 번째 그림(종료 지점 확대)은 원래부터 과장 없음.
+163 m 트랙에서 차이는 수 cm 라 실제 축척으론 겹쳐 보여서 **중심선 대비 편차만 `MAGNIFY` 배로 과장**함 (실제 위치 아님).
+실격했으면 그 지점을 실제 축척으로 확대해서 한 장 더 보여줌.
 ''')
 code('''
-MAGNIFY = 15      # 중심선 대비 편차를 몇 배로 과장할지. 1 = 실제 축척
+MAGNIFY = 15      # 편차를 몇 배로 과장할지. 1 = 실제 축척
 
-paths = {}
-r_or = closed_loop.run(env, model.OraclePredictor(trk, cfg), trk, cfg, H_g2i, latency_steps=0)
-paths[f"oracle -> {r_or.reason} ({r_or.progress_m:.0f} m)"] = r_or.pose_trace
-for lat, r in results.items():
-    paths[f"model latency {lat} -> {r.reason} ({r.progress_m:.0f} m, {r.time_s:.0f} s)"] = r.pose_trace
+r_or = closed_loop.run(env, model.OraclePredictor(trk, cfg), trk, cfg, H_g2i)
+paths = {f"oracle -> {r_or.reason} ({r_or.progress_m:.0f} m)": r_or.pose_trace,
+         f"model -> {r.reason} ({r.progress_m:.0f} m, {r.time_s:.0f} s)": r.pose_trace}
 pm, _ = viz.draw_paths_on_map(mapimg, trk, cfg, paths, magnify=MAGNIFY)
-show(pm, width=900, title="전체 맵: 경로 비교")
+show(pm, width=900, title="전체 맵: 오라클 vs 모델")
 
-r0 = results[LATENCIES[0]]
-plain, off = viz.draw_paths_on_map(mapimg, trk, cfg, paths, legend=False)      # 확대용은 실제 축척
-show(viz.crop_around(plain, off, mapimg, r0.pose_trace[-1], half_m=3.0, scale=3), width=500, title=f"지연 {LATENCIES[0]} 주행의 종료 지점 ({r0.reason}) — 실제 축척")
+if r.reason != "lap":
+    plain, off = viz.draw_paths_on_map(mapimg, trk, cfg, paths, legend=False)
+    show(viz.crop_around(plain, off, mapimg, r.pose_trace[-1], half_m=3.0, scale=3), width=500,
+         title=f"모델이 멈춘 지점 ({r.reason}) — 실제 축척")
 ''')
 
 # =========================================================================== 5. 보관
 md('''
-## 5. 결과 보관
-여기까지 만든 파일은 코랩 VM 에 있고 런타임 끊기면 사라짐. 아래 셀이 드라이브로 복사함.
-`model.pt` 는 SHA-256 검증하고 `checkpoint.json` 에 설정과 git commit 을 같이 기록함. 젯슨에서 받을 때 그 해시로 대조.
-데이터셋은 zip 하나로 묶어서 옮김. 파일 2만 개를 그대로 올리면 드라이브가 못 견딤.
+## 5. 결과 보관 + 젯슨용 ONNX
+여기까지 만든 파일은 코랩 VM 에 있고 런타임 끊기면 사라짐. 아래 셀이 드라이브로 옮김.
+
+젯슨은 **ONNX** 를 받아서 TensorRT 엔진을 직접 만듦. 엔진은 GPU·TRT 버전마다 달라서 코랩에서 만든 건 못 씀.
+ONNX 안에 학습된 가중치가 다 있어서 **젯슨엔 PyTorch 가 필요 없음.**
+
+1. 아래 셀이 `model.onnx` 를 만들고, onnxruntime 으로 돌려서 PyTorch 결과와 같은지 확인한 뒤 드라이브에 올림.
+   `checkpoint.json` 에 SHA-256 과 설정·git commit 을 같이 기록함. `model.pt` 도 재학습용으로 같이 올림.
+2. 드라이브 웹에서 **`model.onnx`** 공유를 "링크가 있는 모든 사용자: 뷰어"로 바꾸고 링크 복사.
+3. 젯슨에서 (`LINK`, `SHA` 는 바꿀 것):
+   ```bash
+   pip install gdown && gdown 'LINK' -O model.onnx
+   echo 'SHA  model.onnx' | sha256sum -c -
+   /usr/src/tensorrt/bin/trtexec --onnx=model.onnx --saveEngine=model.engine --fp16
+   ```
+   엔진 입력은 `bev` (1, 3, 380, 300) BGR 0~1 float, 출력은 `wp` (1, 2) = (x, y) m.
 ''')
 code('''
 from pathlib import Path
-import shutil
+import shutil, onnxruntime as ort
 
 SAVE_DATASET = False    # 데이터셋 zip 까지 보관하려면 True
-checkpoint = Path("model.pt")
-if not checkpoint.is_file(): raise FileNotFoundError("model.pt 없음. 3장 학습 셀을 먼저 실행할 것")
+
+onnx_path = model.export_onnx(net, cfg, "model.onnx")
+x = torch.rand(1, 3, *render.bev_size(cfg))
+with torch.no_grad():
+    ref = net.cpu().eval()(x).numpy()
+out = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"]).run(None, {"bev": x.numpy()})[0]
+print(f"ONNX vs PyTorch 최대 차이: {np.abs(out - ref).max():.1e}")     # 1e-4 보다 작아야 정상
+net.to(DEVICE)
 
 from google.colab import drive
 drive.mount("/content/drive")
 dst = Path("/content/drive/MyDrive/camsim_results")
 git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-manifest = handoff.export_checkpoint(checkpoint, dst, cfg, git_commit)
-for name in ("sweep_oracle.json", "run_latency0.mp4"):
-    src = Path("out") / name
-    if src.is_file(): shutil.copy2(src, dst / name)
+manifest = handoff.export_checkpoint(Path(onnx_path), dst, cfg, git_commit)
+shutil.copy2("model.pt", dst / "model.pt")
 if SAVE_DATASET:
     archive = shutil.make_archive("out/dataset", "zip", root_dir="out", base_dir="dataset")
     shutil.copy2(archive, dst / "dataset.zip")
-print("Drive 저장:", dst / checkpoint.name)
+print("드라이브:", dst / "model.onnx")
 print("SHA-256:", manifest["sha256"])
-print("Git commit:", git_commit)
-print("Drive 에서 model.pt 공유 링크를 복사해 Jetson 의 gdown 명령에 쓸 것")
+print("git commit:", git_commit)
 ''')
 
 nb = {"cells": cells,

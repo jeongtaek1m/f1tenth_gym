@@ -1,7 +1,10 @@
-"""작은 CNN 과 predict 래퍼.
+"""waypoint CNN 과 predict 래퍼.
 
-시뮬 폐루프와 실차 ROS 노드가 똑같이 Predictor.predict(bev) 를 부름. 그게 이 설계의 목표.
+시뮬 폐루프와 실차가 똑같이 Predictor.predict(bev) 를 부름. 그게 이 설계의 목표.
 출력은 waypoint 하나의 (x, y), 단위 m.
+
+젯슨에선 TensorRT 로 돌리므로 ONNX 로 깨끗하게 넘어가는 연산만 씀.
+AdaptiveAvgPool 은 입력 크기가 출력 크기로 안 나눠떨어지면 legacy ONNX export 가 실패해서 안 씀.
 """
 from dataclasses import asdict
 import numpy as np
@@ -11,32 +14,61 @@ from .config import Config
 from .track import Track
 from . import gt
 from .dataset import to_tensor
-from .render import ipm_bev
+from .render import ipm_bev, bev_size
+
+ARCHS = ("resnet18", "small")
+
+# ImageNet 정규화 값. 우리 입력은 OpenCV BGR 이라 순서도 BGR
+_MEAN_BGR = (0.406, 0.456, 0.485)
+_STD_BGR = (0.225, 0.224, 0.229)
 
 
-def _block(cin, cout):
-    return nn.Sequential(nn.Conv2d(cin, cout, 3, stride=2, padding=1, bias=False),
-                         nn.BatchNorm2d(cout), nn.ReLU(inplace=True))
+def _small_backbone():
+    def block(cin, cout):
+        return nn.Sequential(nn.Conv2d(cin, cout, 3, stride=2, padding=1, bias=False),
+                             nn.BatchNorm2d(cout), nn.ReLU(inplace=True))
+    return nn.Sequential(block(3, 16), block(16, 32), block(32, 64), block(64, 128), block(128, 128)), 128
+
+
+def _resnet18_backbone(pretrained: bool):
+    import torchvision
+    r = torchvision.models.resnet18(weights="IMAGENET1K_V1" if pretrained else None)
+    # ImageNet 가중치는 RGB 입력으로 학습됨. 입력 채널 순서를 뒤집어서 BGR 을 그대로 받게 함 (연산 추가 없음)
+    with torch.no_grad():
+        r.conv1.weight.copy_(r.conv1.weight[:, [2, 1, 0]])
+    return nn.Sequential(r.conv1, r.bn1, r.relu, r.maxpool, r.layer1, r.layer2, r.layer3, r.layer4), 512
 
 
 class WaypointNet(nn.Module):
-    """stride 2 블록 5개로 줄이고 head 에서 (x, y) 뽑음.
+    """backbone -> 1x1 conv -> flatten -> FC -> (x, y).
 
-    AdaptiveAvgPool 써서 BEV 해상도 바꿔도 head 크기는 그대로. 편하지만 부작용 있음 —
-    학습 때와 다른 해상도를 넣어도 에러 없이 돌아가고 출력만 엉망이 됨. load() 가 input_spec 을
-    검사하는 이유.
+    pooling 대신 flatten 이라 feature map 의 칸(380x300 입력이면 12x10) 위치가 그대로 FC 에 들어감.
+    대신 FC 크기가 BEV 크기에 묶임. 다른 BEV 로 학습한 체크포인트는 어차피 load() 가 거부함.
     """
 
-    def __init__(self):
+    def __init__(self, cfg: Config, pretrained: bool = None):
         super().__init__()
-        self.features = nn.Sequential(_block(3, 16), _block(16, 32), _block(32, 64),
-                                      _block(64, 128), _block(128, 128))
-        self.head = nn.Sequential(nn.AdaptiveAvgPool2d((2, 4)), nn.Flatten(),
-                                  nn.Linear(128 * 8, 128), nn.ReLU(inplace=True),
-                                  nn.Linear(128, 2))
+        arch = cfg.model.arch
+        if arch not in ARCHS:
+            raise ValueError(f"model.arch must be one of {ARCHS}, got {arch!r}")
+        if pretrained is None:
+            pretrained = cfg.model.pretrained
+        self.backbone, c = _resnet18_backbone(pretrained) if arch == "resnet18" else _small_backbone()
+        self.register_buffer("mean", torch.tensor(_MEAN_BGR).view(1, 3, 1, 1))
+        self.register_buffer("std", torch.tensor(_STD_BGR).view(1, 3, 1, 1))
+
+        # FC 입력 크기를 재려고 한 번 흘려 봄. train 모드면 BN 통계가 0 입력으로 오염되니 eval 로
+        self.backbone.eval()
+        with torch.no_grad():
+            fh, fw = self.backbone(torch.zeros(1, 3, *bev_size(cfg))).shape[2:]
+        self.backbone.train()
+        self.head = nn.Sequential(nn.Conv2d(c, 32, 1, bias=False), nn.BatchNorm2d(32), nn.ReLU(inplace=True),
+                                  nn.Flatten(), nn.Linear(32 * fh * fw, 256), nn.ReLU(inplace=True),
+                                  nn.Linear(256, 2))
 
     def forward(self, x):
-        return self.head(self.features(x))
+        """x: BGR 0~1, (N, 3, H, W)."""
+        return self.head(self.backbone((x - self.mean) / self.std))
 
 
 class Predictor:
@@ -55,8 +87,8 @@ class Predictor:
 
 
 class OraclePredictor:
-    """모델 대신 정답을 그대로 돌려줌. 학습된 모델 없어도 폐루프 돌려볼 수 있고,
-    noise_sigma 올려서 "인지 오차가 이만큼이면 주행이 어디서 깨지나"도 볼 수 있음."""
+    """모델 대신 정답을 그대로 돌려줌. 학습된 모델 없이 폐루프를 돌려 보거나,
+    모델 주행과 나란히 그려서 "모델 탓인지 원래 무리인 코너인지" 가를 때 씀."""
 
     def __init__(self, track: Track, cfg: Config, noise_sigma: float = 0.0, rng=None):
         self.track, self.cfg, self.sigma = track, cfg, noise_sigma
@@ -74,9 +106,10 @@ class OraclePredictor:
 
 
 def _input_spec(cfg: Config) -> dict:
-    """체크포인트가 어떤 입력/출력 규격으로 학습됐는지. 이게 다르면 가중치 이어 쓸 수 없음."""
+    """체크포인트가 어떤 입력/출력 규격·구조로 학습됐는지. 이게 다르면 가중치 이어 쓸 수 없음."""
     return {"bev": asdict(cfg.bev), "waypoints": asdict(cfg.waypoints),
-            "lane_colors": {"floor": cfg.lane.color_floor, "tape": cfg.lane.color_tape}}
+            "lane_colors": {"floor": cfg.lane.color_floor, "tape": cfg.lane.color_tape},
+            "arch": cfg.model.arch}
 
 
 def save(net: nn.Module, path, cfg: Config) -> None:
@@ -86,7 +119,20 @@ def save(net: nn.Module, path, cfg: Config) -> None:
 def load(path, cfg: Config) -> WaypointNet:
     ck = torch.load(path, map_location="cpu", weights_only=True)
     if ck.get("input_spec") != _input_spec(cfg):
-        raise ValueError("checkpoint input_spec does not match BEV, waypoint or lane color config")
-    net = WaypointNet()
+        raise ValueError("checkpoint input_spec does not match BEV, waypoint, lane color or arch config")
+    net = WaypointNet(cfg, pretrained=False)        # 가중치는 체크포인트에서 옴. ImageNet 다운로드 불필요
     net.load_state_dict(ck["state_dict"])
     return net
+
+
+def export_onnx(net: nn.Module, cfg: Config, path) -> str:
+    """젯슨 TensorRT 용 ONNX. 입력 (1, 3, H, W) BGR 0~1 고정, 출력 (1, 2) = (x, y) / norm_m.
+
+    legacy exporter 를 씀. TRT 튜토리얼·trtexec 가 가정하는 방식이고, 이 모델에선 Conv/Relu/MaxPool/Add/
+    Sub/Div/Flatten/Gemm 만 나옴 (BN 은 conv 에 흡수됨).
+    """
+    net = net.eval().cpu()
+    x = torch.zeros(1, 3, *bev_size(cfg))
+    torch.onnx.export(net, x, str(path), input_names=["bev"], output_names=["wp"],
+                      opset_version=17, do_constant_folding=True, dynamo=False)
+    return str(path)

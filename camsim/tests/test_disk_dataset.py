@@ -4,6 +4,7 @@ from camsim import config, track, dataset, train, model, gt
 @pytest.fixture(scope="module")
 def ctx(tmp_path_factory):
     cfg = config.load()
+    cfg.model.arch, cfg.model.pretrained = "small", False   # 루프 검사라 빠른 모델로
     trk = track.from_csv(cfg.closed_loop.centerline_csv, cfg)
     root = str(tmp_path_factory.mktemp("ds"))
     dataset.generate_dataset(trk, cfg, 30, root, seed=1, log_every=0)

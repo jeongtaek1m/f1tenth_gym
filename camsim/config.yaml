@@ -26,7 +26,7 @@ lane:
 bev:                        # 모델 입력 규격. 시뮬 BEV 와 실차 IPM 출력이 공유
   x_range_m: [0.2, 4.0]     # 전방 거리 범위
   y_range_m: [-1.5, 1.5]    # 좌(+) / 우(-)
-  resolution_m: 0.005       # m/px -> 760 x 600 픽셀
+  resolution_m: 0.01        # m/px -> 380 x 300 픽셀. 테이프 5 cm = 5 px. 카메라가 1.5 m 에서 주는 해상도보다 촘촘함
 
 render:
   near_m: 0.15              # 이보다 가까운 테이프는 안 그림
@@ -64,12 +64,16 @@ augment:                    # 기본값은 전부 "변화 없음". 증강 설계
   noise_sigma: 0.0          # 가우시안 노이즈 표준편차
   jpeg_quality: [100, 100]  # JPEG 품질 범위 (100 이면 사실상 무손실)
 
+model:
+  arch: resnet18            # resnet18 = ImageNet 사전학습 백본 (실차 조명·질감 변화에 강함)
+                            # small    = 작은 CNN (37만 파라미터, 젯슨이 느리면)
+  pretrained: true          # resnet18 일 때 ImageNet 가중치로 시작
+
 closed_loop:
   map_yaml: examples/example_map.yaml
   centerline_csv: examples/example_waypoints.csv
   control_hz: 25            # 카메라/제어 주기. gym 물리 100 Hz 의 약수여야 함 (25, 50, 100)
   speed_mps: 2.0
-  latency_steps: 0          # 제어 틱 단위 지연
   max_steps: 4000           # 제어 틱
   car_length_m: 0.58        # gym 기본 차체. 테이프 실격 판정에 씀
   car_width_m: 0.31

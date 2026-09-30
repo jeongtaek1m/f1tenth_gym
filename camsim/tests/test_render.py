@@ -164,7 +164,7 @@ def test_ipm_bev_agrees_with_render_bev_near(ctx):
     i = np.all(ipm[v_near:] == cfg.lane.color_tape, axis=-1)
     k = np.ones((5, 5), np.uint8)
     t_d = cv2.dilate(t.astype(np.uint8), k).astype(bool)
-    assert i.sum() > 500
+    assert i.sum() * cfg.bev.resolution_m ** 2 > 0.01      # 테이프 100 cm² 이상 (픽셀 수는 해상도 따라 바뀌니 면적으로)
     assert (i & t_d).sum() / i.sum() > 0.9         # ipm tape lies on (dilated) true tape
 
 

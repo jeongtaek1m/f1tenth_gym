@@ -13,7 +13,7 @@
 데이터 생성, 학습, 폐루프 주행, 영상 재생까지 전부 코랩 안에서 돈다.
 
 0장 설치·파라미터 → 1장 카메라와 트랙 → 2장 GT 와 데이터셋 → 3장 학습(train/val loss 실시간)
-→ 4장 폐루프(스윕 표, 횡오차 곡선, 주행 영상) → 5장 Drive 체크포인트 보관.
+→ 4장 폐루프(횡오차 곡선, 주행 영상, 맵 위 경로) → 5장 드라이브 보관 + 젯슨용 ONNX.
 
 각 장 첫 셀의 파라미터를 바꾸고 그 장을 다시 실행하면서 뭐가 달라지는지 본다.
 `config.yaml` 은 기본값이고, 노트북 파라미터 셀이 그 위에 덮어쓴다.
@@ -25,7 +25,7 @@
 
 ## 학생이 손대는 곳
 
-**노트북 0장의 "파라미터" 셀 하나다.** 카메라 높이·각도·화각, 테이프 폭, waypoint 거리, 지연, 속도가
+**노트북 0장의 "파라미터" 셀 하나다.** 카메라 높이·각도·화각, 테이프 폭, waypoint 거리, 모델 구조, 속도가
 전부 거기 모여 있다. 그리고 3장의 `my_augment` 함수.
 
 `camsim/config.yaml` 은 기본값 파일이고 **코랩에서는 직접 고치지 않는다.** 파라미터 셀이 그 위에
@@ -47,7 +47,8 @@
 공유할 수 있다. 실차용 편의 함수로 `Predictor.predict_camera(cam, H_i2g)` 도 있다.
 
 원근 렌더(`render.render`)는 눈으로 확인하거나 IPM 과 비교할 때만 쓴다.
-BEV 범위와 해상도는 `config.yaml` 의 `bev:` 섹션 하나로 정한다.
+BEV 범위와 해상도는 `config.yaml` 의 `bev:` 섹션 하나로 정한다. 기본은 전방 0.2~4 m, 좌우 ±1.5 m,
+1 cm/px → 380×300 이다. 테이프 5 cm 가 5 px 이고, 카메라가 1.5 m 에서 주는 해상도(전후 3.5 cm/px)보다 촘촘하다.
 
 ## waypoint 는 1개, 거리는 config 로
 
@@ -58,8 +59,28 @@ BEV 범위와 해상도는 `config.yaml` 의 `bev:` 섹션 하나로 정한다.
 `input_spec` 검사에서 거부되니 조용히 섞일 일은 없다.
 
 1 m 인 이유: 카메라 높이 0.2 m, 정면 장착 기준으로 PV → IPM → BEV 복구 오차를 재 보면 1.5 m 까지는
-테이프 위치가 0.3 cm 안이고, 2 m 를 넘으면 코너에서 8~10 cm, 3 m 는 직선에서도 6 cm(최대 16 cm)다.
+테이프 위치가 0.5 cm 안이고, 2 m 를 넘으면 코너에서 7 cm, 3 m 는 직선에서도 7 cm 다.
 2 m 안쪽에서 고를 것. 더 멀리 보려면 카메라를 올려야 한다 (0.35 m + 15° 숙이면 3 m 에서 0.4 cm).
+
+## 모델
+
+```
+BEV (3, 380, 300) BGR 0~1
+  (x - mean) / std                    ImageNet 정규화. 모델 안에 있어서 젯슨도 같은 전처리가 됨
+ResNet-18 백본 (ImageNet 사전학습)     → (512, 12, 10)
+1×1 conv 512→32 · BN · ReLU           → (32, 12, 10)
+flatten 3840 → FC 256 → ReLU → FC 2   → (x, y) m
+```
+
+- **사전학습 백본** 인 이유: 시뮬 BEV 는 깨끗한 노란 줄뿐이라 처음부터 배운 모델은 실차의 조명·그림자·바닥 질감에
+  무너지기 쉽다. 시뮬 오차는 작은 모델과 비슷하고, 차이는 노트북 3장 열화 표에서 드러난다.
+- **pooling 없는 head**: 답이 점의 *위치* 라 공간 정보를 평균으로 지우면 안 된다. 또 `AdaptiveAvgPool` 은
+  feature map 이 출력 크기로 안 나눠떨어지면 legacy ONNX export 가 실패해서 TensorRT 로 못 넘어간다.
+- **BGR**: ImageNet 가중치는 RGB 로 학습됐다. conv1 의 입력 채널 순서를 뒤집어 BGR 을 그대로 받게 해서
+  채널 교환 연산이 ONNX 에 안 남는다. `test_resnet_takes_bgr_like_imagenet_takes_rgb` 가 이걸 검증한다.
+
+`model.arch: small` 이면 같은 head 에 작은 CNN 백본 (37만 → head 포함 123만 파라미터). 학습이 훨씬 빠르고
+젯슨이 느리면 이걸 쓴다. 구조가 체크포인트 `input_spec` 에 들어가서 다른 구조로는 로드가 거부된다.
 
 ## 데이터셋
 
@@ -116,27 +137,28 @@ gym 벽 충돌(`collision`)은 이 맵에서 벽이 멀어서 거의 안 난다.
 world = gym 맵 (m). vehicle = 후륜축 원점, x 전방, y 좌측. image = OpenCV (u 우, v 아래).
 `H_g2i` 는 ground (x,y,1) -> image. pitch 가 0이면 지평선이 이미지 세로 중앙에 온다.
 
-## Colab → Google Drive → Jetson 전달
+## Colab → Google Drive → Jetson (TensorRT)
 
-1. 로컬 변경을 검토한 뒤 `git push origin main` 으로 올린다. 위 Colab 배지로 노트북을 열고
-   GPU 런타임에서 0~5장을 순서대로 실행한다. 학습 결과는 레포 루트의 `model.pt` 다.
-2. 5장 보관 셀은 `model.pt` 를 `MyDrive/camsim_results/` 로 복사하고 SHA-256 을 대조한다.
-   같은 폴더에 실행 설정과 Git 커밋을 담은 `checkpoint.json` 도 쓴다. 데이터셋까지 보관하려면
-   셀의 `SAVE_DATASET = True` 로 바꾼다.
-3. Google Drive 웹에서 **`model.pt` 파일**을 선택해 공유 권한을 "링크가 있는 모든 사용자: 뷰어"로
-   설정하고 링크를 복사한다. 폴더 링크나 `checkpoint.json` 링크를 넣으면 다른 파일을 받게 된다.
-4. Jetson 터미널에서 다음을 실행한다. `DRIVE_FILE_LINK` 는 3단계 링크로, `SHA256_FROM_COLAB`
-   은 5장 셀이 출력한 64자리 값으로 바꾼다. 이 단계는 파일 전달·무결성 확인까지만 한다.
+젯슨은 `model.onnx` 를 받아서 TensorRT 엔진을 **젯슨에서 직접** 만든다. 엔진은 GPU·TRT 버전마다 달라서
+코랩에서 만든 건 못 쓴다. 학습된 가중치는 ONNX 안에 다 있어서 젯슨엔 PyTorch 가 필요 없다.
+
+1. Colab 배지로 노트북을 열고 GPU 런타임에서 0~5장을 순서대로 실행한다.
+2. 5장 셀이 `model.onnx` 를 만들고 onnxruntime 으로 PyTorch 결과와 같은지 확인한 뒤
+   `MyDrive/camsim_results/` 로 올린다. 같은 폴더에 SHA-256·설정·git commit 을 담은 `checkpoint.json`,
+   재학습용 `model.pt` 도 쓴다. 데이터셋까지 보관하려면 셀의 `SAVE_DATASET = True`.
+3. 드라이브 웹에서 **`model.onnx` 파일**의 공유를 "링크가 있는 모든 사용자: 뷰어"로 바꾸고 링크를 복사한다.
+4. 젯슨에서 (`DRIVE_FILE_LINK`, `SHA256_FROM_COLAB` 는 바꿀 것):
 
    ```bash
    python3 -m venv "$HOME/camsim-transfer-venv"
    "$HOME/camsim-transfer-venv/bin/python" -m pip install gdown
-   "$HOME/camsim-transfer-venv/bin/python" -m gdown 'DRIVE_FILE_LINK' -O "$HOME/model.pt"
-   printf '%s  %s\n' 'SHA256_FROM_COLAB' "$HOME/model.pt" | sha256sum -c -
+   "$HOME/camsim-transfer-venv/bin/python" -m gdown 'DRIVE_FILE_LINK' -O "$HOME/model.onnx"
+   printf '%s  %s\n' 'SHA256_FROM_COLAB' "$HOME/model.onnx" | sha256sum -c -
+   /usr/src/tensorrt/bin/trtexec --onnx="$HOME/model.onnx" --saveEngine="$HOME/model.engine" --fp16
    ```
 
-   `python3 -m venv` 가 없으면 Jetson 에 `python3-venv` 패키지가 필요하다. 공유 권한이 없으면
-   `gdown` 은 파일을 받을 수 없다. Jetson 추론 실행과 PyTorch 설치는 이 전달 절차에 포함되지 않는다.
+   엔진 입력 `bev` 는 (1, 3, 380, 300) BGR 0~1 float, 출력 `wp` 는 (1, 2) = (x, y) / `waypoints.norm_m`.
+   BEV 는 노트북과 같은 `config.yaml` 로 `render.ipm_bev` 를 거친 것이어야 한다.
 
 ## 코랩 주의
 
@@ -149,7 +171,7 @@ world = gym 맵 (m). vehicle = 후륜축 원점, x 전방, y 좌측. image = Ope
   `from pyglet import gl` 을 해서, 창을 안 띄워도 GL 라이브러리가 있어야 한다.
 - 노트북 첫 코드 셀의 `REPO_URL` 기본값은 조교 fork 다. 다른 fork 를 쓰면 그 줄만 바꾸면 된다.
   clone 이 실패하면 `%cd f1tenth_gym` 부터 전부 깨지므로 주소를 먼저 확인할 것.
-- 세션이 끊기면 로컬 VM 파일이 사라진다. `model.pt` 는 5장에서 Drive 로 옮긴다.
+- 세션이 끊기면 로컬 VM 파일이 사라진다. `model.onnx`, `model.pt` 는 5장에서 드라이브로 옮긴다.
 
 ## 로컬에서 테스트만 돌리려면
 

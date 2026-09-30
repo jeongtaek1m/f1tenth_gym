@@ -8,7 +8,6 @@
 
 실차 트랙엔 벽이 없고 테이프가 경계라서, 실격 판정도 벽이 아니라 테이프로 함.
 """
-from collections import deque
 from dataclasses import dataclass
 import os
 import warnings
@@ -18,7 +17,6 @@ from .config import Config
 from .track import Track
 from . import gt, render, viz
 from .pure_pursuit import pure_pursuit
-from .model import OraclePredictor
 
 
 def make_env(cfg: Config):
@@ -59,10 +57,8 @@ def _unwrap_progress(track: Track, s_prev: float, s_now: float) -> float:
 
 
 def run(env, predictor, track: Track, cfg: Config, H_g2i: np.ndarray, start_index: int = 0,
-        latency_steps=None, video_path=None) -> Result:
+        video_path=None) -> Result:
     cl = cfg.closed_loop
-    if latency_steps is None:
-        latency_steps = cl.latency_steps
 
     # 제어 한 틱마다 물리를 몇 번 돌릴지. control_hz 가 물리 주파수의 약수가 아니면 반올림되면서
     # 실제 제어 주기가 요청값과 달라지므로, 그 경우 경고하고 실제값(hz_eff)을 결과에 남김
@@ -77,8 +73,6 @@ def run(env, predictor, track: Track, cfg: Config, H_g2i: np.ndarray, start_inde
 
     p0 = track.center[start_index]
     obs, _, done, _ = env.reset(np.array([[p0[0], p0[1], track.heading[start_index]]]))
-    # 지연 버퍼. 처음 latency_steps 틱 동안은 "직진" 예측을 내보냄
-    buf = deque([np.array([cfg.waypoints.ahead_m, 0.0])] * latency_steps)
 
     mask = render.bev_visibility_mask(H_g2i, cfg)
     writer = None            # 영상은 [카메라 뷰 | 모델 입력 BEV]. 첫 프레임 크기로 열림
@@ -93,8 +87,7 @@ def run(env, predictor, track: Track, cfg: Config, H_g2i: np.ndarray, start_inde
             bev = render.render_bev(pose, track.quads, cfg, mask)
             if hasattr(predictor, "set_pose"):
                 predictor.set_pose(pose)
-            buf.append(predictor.predict(bev))
-            wp = buf.popleft()                     # latency_steps 틱 전의 예측으로 조향
+            wp = predictor.predict(bev)
             steer = pure_pursuit(wp, cl.wheelbase_m, cl.steer_max_rad)
             if video_path is not None:
                 cam = render.draw_points(render.render(pose, track.quads, obs["scans"][0], H_g2i, cfg), wp, H_g2i)
@@ -126,19 +119,3 @@ def run(env, predictor, track: Track, cfg: Config, H_g2i: np.ndarray, start_inde
     lats = np.array(lats) if lats else np.zeros(1)
     return Result(reason == "lap", reason, steps, float(lats.mean()), float(lats.max()), float(traveled),
                   hz_eff, steps / hz_eff, lats, np.array(poses).reshape(-1, 3))
-
-
-def sweep(env, track: Track, cfg: Config, H_g2i, latency_list, sigma_list, predictor_factory=None):
-    """지연 x 인지오차 격자를 훑음. predictor_factory 안 주면 오라클에 노이즈 섞어 씀."""
-    rows = []
-    for lat in latency_list:
-        for sig in sigma_list:
-            pred = (predictor_factory(sig) if predictor_factory
-                    else OraclePredictor(track, cfg, noise_sigma=sig))
-            r = run(env, pred, track, cfg, H_g2i, latency_steps=lat)
-            rows.append({"latency_steps": lat, "sigma": sig, "finished": r.finished, "reason": r.reason,
-                         "mean_lateral_m": r.mean_lateral_m, "max_lateral_m": r.max_lateral_m,
-                         "steps": r.steps, "progress_m": r.progress_m})
-            print(f"latency={lat:2d} sigma={sig:.2f} -> {r.reason:9s} lat_mean={r.mean_lateral_m:.3f} "
-                  f"lat_max={r.max_lateral_m:.3f} progress={r.progress_m:.1f}m", flush=True)
-    return rows

@@ -4,6 +4,7 @@ from camsim import config, track, train, model
 @pytest.fixture(scope="module")
 def ctx():
     cfg = config.load()
+    cfg.model.arch, cfg.model.pretrained = "small", False   # 루프 검사라 빠른 모델로
     return cfg, track.from_csv("examples/example_waypoints.csv", cfg)
 
 def test_evaluate_oracle_is_zero(ctx):

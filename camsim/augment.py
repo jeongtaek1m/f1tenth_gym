@@ -63,15 +63,16 @@ def ipm_blur(bev: np.ndarray, cfg: Config, rng: np.random.Generator) -> np.ndarr
 
 
 def erase_patches(bev: np.ndarray, cfg: Config, rng: np.random.Generator, n_max: int = 3,
-                  size_px=(10, 60)) -> np.ndarray:
-    """임의 사각형을 바닥색으로 지움. 테이프가 벗겨졌거나 뭔가에 가린 상황."""
+                  size_m=(0.05, 0.30)) -> np.ndarray:
+    """임의 사각형을 바닥색으로 지움. 테이프가 벗겨졌거나 뭔가에 가린 상황. 크기는 m 라 BEV 해상도와 무관."""
     if rng.uniform() >= cfg.augment.tape_dropout_prob:
         return bev
     out = bev.copy()
     h, w = out.shape[:2]
     floor = np.array(cfg.lane.color_floor, np.uint8)
+    lo, hi = (max(1, int(round(s / cfg.bev.resolution_m))) for s in size_m)
     for _ in range(int(rng.integers(1, n_max + 1))):
-        ph, pw = rng.integers(size_px[0], size_px[1] + 1, 2)
+        ph, pw = rng.integers(lo, hi + 1, 2)
         y, x = int(rng.integers(0, max(1, h - ph))), int(rng.integers(0, max(1, w - pw)))
         out[y:y + ph, x:x + pw] = floor
     return out

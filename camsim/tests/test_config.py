@@ -8,6 +8,7 @@ def test_default_config_values():
     assert cfg.camera.image_height == 400
     assert cfg.lane.track_width_m == 0.8
     assert cfg.waypoints.ahead_m == 1.0
+    assert cfg.model.arch == "resnet18" and cfg.model.pretrained
     assert cfg.render.lidar_fov_rad == pytest.approx(4.7)
 
 def test_missing_key_names_key(tmp_path):

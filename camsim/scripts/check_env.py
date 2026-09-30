@@ -10,15 +10,16 @@ import sys
 
 # 모듈 이름 -> pip 패키지 이름
 CORE = [("numpy", "numpy"), ("cv2", "opencv-python-headless"), ("yaml", "pyyaml"),
-        ("PIL", "pillow"), ("torch", "torch")]
+        ("PIL", "pillow"), ("torch", "torch"), ("torchvision", "torchvision")]
 SIM = [("gym", "gym==0.19.0"), ("f110_gym", "f110_gym (이 레포)")]
 LAB = [("matplotlib", "matplotlib"), ("pandas", "pandas"),
-       ("imageio_ffmpeg", "imageio-ffmpeg")]
+       ("imageio_ffmpeg", "imageio-ffmpeg"), ("onnx", "onnx"), ("onnxruntime", "onnxruntime")]
 
 # 모드 -> 필요한 모듈
 MODES = [
     ("데이터 생성",      ["numpy", "cv2", "yaml", "PIL", "torch"]),
-    ("학습",             ["numpy", "cv2", "yaml", "PIL", "torch"]),
+    ("학습 (resnet18)",  ["numpy", "cv2", "yaml", "PIL", "torch", "torchvision"]),
+    ("젯슨용 ONNX",      ["torch", "torchvision", "onnx", "onnxruntime"]),
     ("폐루프 시뮬",      ["numpy", "cv2", "yaml", "PIL", "torch", "gym", "f110_gym"]),
     ("주행 영상 재생",   ["imageio_ffmpeg"]),
     ("노트북 그래프",    ["matplotlib", "pandas"]),
@@ -74,7 +75,7 @@ def main():
         print()
         print("Colab 설치:  notebooks/camsim_lab.ipynb 의 첫 코드 셀 실행")
         print("로컬 기본 의존성:  python -m pip install -r camsim/requirements.txt")
-        print("PyTorch, gym 0.19, f110_gym 은 Colab 노트북이 별도로 확인·설치합니다.")
+        print("PyTorch, torchvision, gym 0.19, f110_gym 은 Colab 노트북이 따로 확인·설치함")
     return 0
 
 
